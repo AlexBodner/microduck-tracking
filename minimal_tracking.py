@@ -33,6 +33,17 @@ for c in spec.cameras:
         th = math.radians(25)
         c.quat = [math.cos(th / 2), 0, math.sin(th / 2), 0]
         c.fovy = 90
+ball2 = spec.worldbody.add_body(name="ball2", pos=[0.9, 0.6, 0.035])
+ball2.add_freejoint(name="ball2_free")
+ball2.add_geom(
+    name="ball2_geom",
+    type=mujoco.mjtGeom.mjGEOM_SPHERE,
+    size=[0.035, 0, 0],
+    rgba=[1, 0.55, 0, 1],
+    condim=6,
+    friction=[0.5, 0.005, 0.001],
+    mass=0.015,
+)
 model = spec.compile()
 data = mujoco.MjData(model)
 
@@ -44,10 +55,14 @@ for i in range(model.nu):
     data.qpos[int(model.jnt_qposadr[model.actuator_trnid[i, 0]])] = DEFAULT_POSE[i]
 data.ctrl[:] = DEFAULT_POSE[: model.nu]
 
-jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "ball_free")
-qadr, vadr = int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid])
-data.qpos[qadr : qadr + 3] = [0.8, -0.6, 0.035]
-data.qvel[vadr + 1] = 1.2
+for jname, pos, vy in (
+    ("ball_free", [0.8, -0.6, 0.035], 1.2),
+    ("ball2_free", [1.1, 0.7, 0.035], -1.0),
+):
+    jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jname)
+    qadr, vadr = int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid])
+    data.qpos[qadr : qadr + 3] = pos
+    data.qvel[vadr + 1] = vy
 mujoco.mj_forward(model, data)
 
 renderer = mujoco.Renderer(model, height=960, width=544)
@@ -55,7 +70,10 @@ seg = mujoco.Renderer(model, height=960, width=544)
 seg.enable_segmentation_rendering()
 head_opt = mujoco.MjvOption()
 head_opt.geomgroup[2] = 0
-ball_gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
+BALL_GIDS = [
+    mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, n)
+    for n in ("ball_geom", "ball2_geom")
+]
 
 tracker = SORTTracker(frame_rate=50.0, iou=BIoU(buffer_ratio=2.0))
 box_annotator = sv.BoxAnnotator(thickness=3)
@@ -63,17 +81,20 @@ label_annotator = sv.LabelAnnotator(text_scale=0.8, text_thickness=2)
 
 
 def detect(seg_frame):
-    mask = (seg_frame[..., 0] == ball_gid) & (
-        seg_frame[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM)
-    )
-    ys, xs = np.nonzero(mask)
-    if len(xs) < 3:
+    boxes = []
+    for gid in BALL_GIDS:
+        mask = (seg_frame[..., 0] == gid) & (
+            seg_frame[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM)
+        )
+        ys, xs = np.nonzero(mask)
+        if len(xs) >= 3:
+            boxes.append([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1])
+    if not boxes:
         return sv.Detections.empty()
-    box = [[xs.min(), ys.min(), xs.max() + 1, ys.max() + 1]]
     return sv.Detections(
-        xyxy=np.array(box, dtype=float),
-        confidence=np.ones(1),
-        class_id=np.zeros(1, dtype=int),
+        xyxy=np.array(boxes, dtype=float),
+        confidence=np.ones(len(boxes)),
+        class_id=np.zeros(len(boxes), dtype=int),
     )
 
 
