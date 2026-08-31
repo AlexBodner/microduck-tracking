@@ -7,3 +7,4 @@ __pycache__/
 !assets/*
 !benchmark/detections_cache.npz
 duck_detect.onnx
+.reports/

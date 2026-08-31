@@ -1,4 +1,5 @@
 trackers>=2.6.0
+supervision>=0.30.0
 mujoco>=3.2
 onnxruntime
 opencv-python
