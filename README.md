@@ -11,6 +11,10 @@ playing fetch with it.
 If this is useful, the tracking layer is the library:
 [roboflow/trackers](https://github.com/roboflow/trackers), `pip install trackers`.
 
+![Microduck fetch demo](assets/fetch_demo.gif)
+
+Full clip with both fetch cycles: [assets/fetch_demo.mp4](assets/fetch_demo.mp4).
+
 ## What the demo shows
 
 The duck stands among identical orange balls. An animated owner's hand lobs one more

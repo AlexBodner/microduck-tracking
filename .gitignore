@@ -3,3 +3,5 @@ policies/
 *.mp4
 __pycache__/
 *.log
+*.png
+!assets/*
