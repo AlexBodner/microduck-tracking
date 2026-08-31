@@ -56,6 +56,33 @@ INSET_W, INSET_H = 480, 270      # POV picture-in-picture, top-left corner
 spec = mujoco.MjSpec.from_file(MICRODUCK_BALL_XML)
 spec.visual.global_.offwidth = 1280
 spec.visual.global_.offheight = 1280  # head cam renders portrait, needs height
+# Park styling: mowed-lawn greens instead of the blue checker, a hazier sky,
+# matte ground, and a handful of low-poly trees on the horizon.
+for t in spec.textures:
+    if t.name == "groundplane":
+        t.rgb1 = [0.40, 0.56, 0.24]
+        t.rgb2 = [0.33, 0.49, 0.20]
+        t.mark = mujoco.mjtMark.mjMARK_NONE
+    elif t.type == mujoco.mjtTexture.mjTEXTURE_SKYBOX:
+        t.rgb1 = [0.46, 0.70, 0.93]
+        t.rgb2 = [0.88, 0.94, 1.0]
+for m in spec.materials:
+    if m.name == "groundplane":
+        m.reflectance = 0.0
+TREES = [(-2.5, 1.8, 1.0), (3.2, 2.4, 1.3), (2.0, -3.0, 0.9), (-3.0, -2.2, 1.15), (4.0, -0.5, 1.05)]
+for k, (tx, ty, sc) in enumerate(TREES):
+    tb = spec.worldbody.add_body(name=f"tree{k}", pos=[tx, ty, 0])
+    tb.add_geom(
+        name=f"trunk{k}", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        size=[0.06 * sc, 0.35 * sc, 0], pos=[0, 0, 0.35 * sc],
+        rgba=[0.42, 0.30, 0.20, 1], contype=0, conaffinity=0,
+    )
+    tb.add_geom(
+        name=f"canopy{k}", type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
+        size=[0.42 * sc, 0.42 * sc, 0.5 * sc], pos=[0, 0, 0.95 * sc],
+        rgba=[0.24 + 0.05 * (k % 3), 0.5 + 0.04 * (k % 2), 0.2, 1],
+        contype=0, conaffinity=0,
+    )
 # The MJCF head_camera points backward with a 90-degree roll; face it forward,
 # pitch it 25 degrees down toward the ground the robot acts on, widen to ~90.
 for c in spec.cameras:
@@ -350,7 +377,7 @@ def detect(head_rgb, boxes, joints):
     """
     if rfdetr_model is not None:
         dets = rfdetr_model.predict(head_rgb, threshold=0.3)
-        keep = dets.class_id == 37  # COCO "sports ball"
+        keep = np.isin(dets.class_id, (37, 53, 55))
         return dets[keep]
     if not boxes:
         return sv.Detections.empty()
