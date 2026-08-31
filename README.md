@@ -62,7 +62,7 @@ the single-class YOLO the robot ships on its NPU.
 
 ## How it works
 
-**Control.** Pollen's own `PolicyInference` runner and pretrained ONNX policies,
+**Policies.** Pollen's own `PolicyInference` runner and pretrained ONNX policies,
 unmodified, at 50 Hz.
 
 **Detection.** RF-DETR Nano on the head-camera frames (`DETECTOR=rfdetr`), or the
@@ -74,9 +74,17 @@ own width between frames, and buffered IoU is what holds identity through it.
 
 **Target selection.** Each track keeps an EMA of its box-center speed in image
 space. After a throw releases, the duck locks the fastest track. It stands still
-through the throw, so image speed alone identifies the thrown ball. The tracker
-answers which ball; the simulator supplies that ball's position for walking to
-it, so this demo does not close the loop on vision-derived localisation.
+through the throw, so image speed alone identifies the thrown ball.
+
+**Navigation.** The duck then walks on that track alone. Bearing comes from the
+box centre against a 480 px focal length, range from the box's apparent
+diameter against the ball's known 70 mm, and the head yaw joint puts the
+bearing back in the body frame. Measured against ground truth the bearing is
+within about a degree and the range within a few centimetres. Below roughly
+0.2 m the ball drops out of the camera's view while the beak reaches only
+0.07 m ahead of the feet, so the last good fix starts a short dead-reckoned
+walk to close that gap. Simulator state reaches the owner's hand, never the
+duck.
 
 ## Does it fit the real robot?
 

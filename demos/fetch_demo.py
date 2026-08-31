@@ -9,11 +9,16 @@ ball, ignoring the identical distractors. Each new throw re-locks onto the new
 moving track. Detection alone cannot express any of this — "the ball that was
 just thrown" only exists as a track.
 
-Pretrained Microduck policies (walking/stand/kicks) run in CPU MuJoCo.
+The controller is closed on vision: bearing comes from the tracked box's
+centre, range from its apparent diameter against the ball's known 70 mm, and
+the head yaw joint puts that bearing back in the body frame. The simulator's
+ball positions are used only by the owner's hand to throw, never by the duck.
+
+Pretrained Microduck policies (walking/stand/pick) run in CPU MuJoCo.
 Detections: set DETECTOR=rfdetr to run RF-DETR on the rendered head-camera
-frames; the default is the simulator's segmentation renderer (a perfect-
-detector stand-in). Control-side ball identification always uses the
-segmentation boxes, so the detector choice only changes what the tracker sees.
+frames; the default is the simulator's segmentation renderer as a perfect-
+detector stand-in. Either way the boxes flow through the tracker into the
+controller.
 """
 
 import math
@@ -50,6 +55,8 @@ MAX_THROWS = 2                   # throws in the video
 RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
 LOCK_WINDOW = 4.0                # seconds after a throw to lock the fast track
 LOCK_SPEED = 4.0                 # px per tracked frame that means "thrown"
+BALL_DIAMETER = 0.07             # metres, for range from apparent size
+RELOCK_AFTER = 0.6               # seconds unseen before re-acquiring
 TRACK_EVERY = int(os.environ.get("TRACK_EVERY", 1))  # 3 = ~16.7 Hz robot cadence
 LOCK_SPEED *= TRACK_EVERY        # a longer interval moves the ball further
 MAIN_W, MAIN_H = 1280, 720       # chase view canvas
@@ -182,15 +189,9 @@ for jname in BALL_JOINTS:
 data.qpos[BALLS[PLAY_JOINT][0] : BALLS[PLAY_JOINT][0] + 3] = [6.0, 6.0, 0.035]
 mujoco.mj_forward(model, data)
 
-GEOM_TO_JOINT = {}
 BALL_GEOM_IDS = []
-BALL_GEOMS = [("ball_geom", PLAY_JOINT)] + [
-    (f"ball{k}_geom", f"ball{k}_free") for k in range(2, 2 + len(DISTRACTOR_POS))
-]
-for gname, jname in BALL_GEOMS:
-    gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, gname)
-    BALL_GEOM_IDS.append(gid)
-    GEOM_TO_JOINT[gid] = jname
+for gname in ["ball_geom"] + [f"ball{k}_geom" for k in range(2, 2 + len(DISTRACTOR_POS))]:
+    BALL_GEOM_IDS.append(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, gname))
 
 # Renderers: chase view, head RGB, head segmentation
 main_r = mujoco.Renderer(model, height=MAIN_H, width=MAIN_W)
@@ -200,6 +201,9 @@ head_r = mujoco.Renderer(model, height=PANEL_W, width=PANEL_H)
 seg_r = mujoco.Renderer(model, height=PANEL_W, width=PANEL_H)
 seg_r.enable_segmentation_rendering()
 # Hide the soft-jaw meshes (group 2) that sit in front of the head camera.
+FOCAL_PX = (PANEL_W / 2) / math.tan(math.radians(90) / 2)
+_head_yaw_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "head_yaw")
+head_yaw_adr = int(model.jnt_qposadr[_head_yaw_jid])
 head_opt = mujoco.MjvOption()
 head_opt.geomgroup[2] = 0
 
@@ -255,15 +259,6 @@ def trunk_yaw_frame():
     qw, qx, qy, qz = data.qpos[adr + 3 : adr + 7]
     yaw = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
     return trunk_xy, yaw
-
-
-def ball_relative(joint):
-    """Ball center in the trunk yaw frame: (forward, left)."""
-    trunk_xy, yaw = trunk_yaw_frame()
-    qadr = BALLS[joint][0]
-    d = data.qpos[qadr : qadr + 2] - trunk_xy
-    c, s = math.cos(-yaw), math.sin(-yaw)
-    return c * d[0] - s * d[1], s * d[0] + c * d[1]
 
 
 PH_REACH, PH_CARRY, PH_THROW, PH_RETRACT = 0.7, 0.7, 0.55, 0.5
@@ -369,18 +364,17 @@ def animate_hand(anim, t):
 
 
 def seg_boxes(seg):
-    """Segmentation frame -> (list of xyxy boxes, joint name per box)."""
+    """Segmentation frame -> list of xyxy ball boxes."""
     is_geom = seg[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM)
     masks = np.stack([(seg[..., 0] == gid) & is_geom for gid in BALL_GEOM_IDS])
     visible = masks.reshape(len(BALL_GEOM_IDS), -1).sum(axis=1) >= 3
     if not visible.any():
-        return [], []
+        return []
     boxes = sv.mask_to_xyxy(masks[visible], coordinate_convention="exclusive")
-    joints = [g for g, v in zip(BALL_GEOM_IDS, visible) if v]
-    return boxes.tolist(), [GEOM_TO_JOINT[g] for g in joints]
+    return boxes.tolist()
 
 
-def detect(head_rgb, boxes, joints):
+def detect(head_rgb, boxes):
     """Detections the tracker consumes.
 
     segmentation mode: the oracle boxes themselves.
@@ -401,21 +395,19 @@ def detect(head_rgb, boxes, joints):
     )
 
 
-def match_tracks_to_joints(tracked, det_boxes, det_joints):
-    """Per-frame map tracker_id -> ball joint, by box center proximity."""
-    out = {}
-    for i, tid in enumerate(tracked.tracker_id):
-        tb = tracked.xyxy[i]
-        tc = ((tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2)
-        best, best_d = None, 1e9
-        for b, j in zip(det_boxes, det_joints):
-            c = ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
-            d = (tc[0] - c[0]) ** 2 + (tc[1] - c[1]) ** 2
-            if d < best_d:
-                best, best_d = j, d
-        if best is not None:
-            out[int(tid)] = best
-    return out
+def measure(box, head_yaw):
+    """Bearing and range to a ball from its box alone.
+
+    The rotated head view spans the camera's 90 degree fovy across its 960 px
+    width, so the focal length is 480 px. A sphere of known diameter gives
+    range from its apparent size; the box centre gives bearing in the head
+    frame, and adding the head yaw joint (an encoder reading, not simulator
+    state) puts that bearing back in the body frame.
+    """
+    centre_x = (box[0] + box[2]) / 2
+    diameter_px = max(box[2] - box[0], box[3] - box[1])
+    bearing = -math.atan2(centre_x - PANEL_W / 2, FOCAL_PX) + head_yaw
+    return bearing, FOCAL_PX * BALL_DIAMETER / max(diameter_px, 1.0)
 
 
 control_dt = 4 * model.opt.timestep
@@ -427,8 +419,8 @@ dump_rows = []  # (frame, x1, y1, x2, y2, confidence) when DUMP_DETECTIONS is se
 kick_cooldown = 0.0
 frames_with_tracks = 0
 target_id = None            # locked tracker ID (the thrown ball's track)
-target_joint = None         # ball joint the locked ID maps to
-id_to_joint: dict[int, str] = {}
+target_fix = None           # (bearing, range) measured from that track's box
+target_last_seen = -1.0
 track_speed: dict[int, float] = {}   # tracker_id -> EMA image-space speed
 track_center: dict[int, tuple] = {}  # tracker_id -> last box center
 track_birth: dict[int, float] = {}   # tracker_id -> first time seen
@@ -439,6 +431,7 @@ prev_behavior = None
 grabbed_this_throw = False
 lock_open_until = -1.0      # lock window after each throw
 grab_settle_until = None    # stand still before triggering the (blind) pick
+final_approach_until = None  # blind straight walk once the ball leaves view
 recover_until = -1.0        # play window after the pick
 play_start = 0.0
 prev_pick_mode = False
@@ -466,8 +459,9 @@ for step in range(n_steps):
         lock_open_until = release_t + LOCK_WINDOW
         next_throw_at = t + 18.0  # timeout fallback if the fetch stalls
         grabbed_this_throw = False
+        final_approach_until = None
         target_id = None    # wait for the new moving track
-        target_joint = None
+        target_fix = None
     if throw_anim is not None and not animate_hand(throw_anim, t):
         throw_anim = None
 
@@ -502,14 +496,14 @@ for step in range(n_steps):
             else:
                 policy.set_vel_cmd(0.0, 0.0, 0.0)
                 policy.head_offset[:] = 0.0
-        elif target_joint is None:
+        elif target_fix is None:
             # Waiting for the owner: stand, head level, watch the field.
             policy.set_vel_cmd(0.0, 0.0, 0.0)
             policy.head_offset[:] = [0.0, 0.1, 0.0, 0.0]
         else:
-            fwd, left = ball_relative(target_joint)
-            err = math.atan2(left, fwd)
-            dist = math.hypot(fwd, left)
+            # Bearing and range below are measured from the tracked box; the
+            # simulator's ball position never reaches the controller.
+            err, dist = target_fix
             # Duck-like gaze toward the LOCKED target only.
             policy.head_offset[:] = [
                 0.0,
@@ -517,16 +511,21 @@ for step in range(n_steps):
                 float(np.clip(err, -0.5, 0.5)),
                 0.0,
             ]
-            at_ball = 0.04 < fwd < 0.15 and abs(left) < 0.10
-            # The (blind) beak pick only reaches ~5-9 cm ahead of the feet, so
-            # demand a closer, straighter park before trying to grab.
-            at_beak = 0.045 < fwd < 0.095 and abs(left) < 0.06
-            if at_ball and not grabbed_this_throw and at_beak:
-                # Reached it: duck down and worry the ball with the beak, the
-                # way a dog gets its mouth on a fresh ball. The owner then
-                # retrieves it for the next throw.
-                grab_settle_until = t + 0.5
-                grabbed_this_throw = True
+            # Vision loses the ball below ~0.2 m (it drops under the camera),
+            # but the beak reaches only ~0.07 m ahead of the feet. So the last
+            # good fix starts a short blind walk straight ahead, closing that
+            # gap dead-reckoned, and the pick follows.
+            if final_approach_until is not None:
+                policy.set_vel_cmd(lin_vel_x=0.3, lin_vel_y=0.0, ang_vel_z=0.0)
+                policy.head_offset[:] = [0.0, 0.5, 0.0, 0.0]
+                if t >= final_approach_until:
+                    final_approach_until = None
+                    grab_settle_until = t + 0.4
+                    grabbed_this_throw = True
+            elif not grabbed_this_throw and dist < 0.33 and abs(err) < 0.22:
+                # Close and centred: walk the remaining distance blind at the
+                # gait's real ~0.12 m/s, then grab.
+                final_approach_until = t + float(np.clip((dist - 0.10) / 0.12, 0.3, 2.5))
             elif grabbed_this_throw:
                 # Touch done: stand over the ball and wait for the owner.
                 policy.set_vel_cmd(0.0, 0.0, 0.0)
@@ -560,9 +559,9 @@ for step in range(n_steps):
     head_r.update_scene(data, camera="head_camera", scene_option=head_opt)
     head = np.ascontiguousarray(np.rot90(head_r.render()))
     seg_r.update_scene(data, camera="head_camera", scene_option=head_opt)
-    ctrl_boxes, ctrl_joints = seg_boxes(np.rot90(seg_r.render()))
+    ctrl_boxes = seg_boxes(np.rot90(seg_r.render()))
     if step % TRACK_EVERY == 0:
-        dets = detect(head, ctrl_boxes, ctrl_joints)
+        dets = detect(head, ctrl_boxes)
         if os.environ.get("DUMP_DETECTIONS"):
             for box, conf in zip(dets.xyxy, dets.confidence):
                 dump_rows.append((step, *box, conf))
@@ -571,8 +570,6 @@ for step in range(n_steps):
 
     if len(tracked):
         frames_with_tracks += 1
-        id_to_joint = match_tracks_to_joints(tracked, ctrl_boxes, ctrl_joints)
-
         # Image-space speed per track (EMA) — this is what identifies the
         # thrown ball: the one track that is actually MOVING.
         for i, tid_ in enumerate(tracked.tracker_id):
@@ -591,20 +588,32 @@ for step in range(n_steps):
         # Lock: after the release, adopt the fastest track that clears the
         # motion threshold. The duck stands still through the whole throw, so
         # egomotion is negligible and image speed singles out the thrown ball.
+        live = {int(i): b for i, b in zip(tracked.tracker_id, tracked.xyxy)}
+        head_yaw = float(data.qpos[head_yaw_adr])
         if target_id is None and last_throw_t <= t <= lock_open_until:
             fast = [
                 (sp, tid)
                 for tid, sp in track_speed.items()
-                if sp >= LOCK_SPEED and tid in id_to_joint
+                if sp >= LOCK_SPEED and tid in live
             ]
             if fast:
                 _, target_id = max(fast)
-                target_joint = id_to_joint[target_id]
-        elif target_joint is not None:
-            # Keep the lock attached across ID churn on the same ball.
-            joint_ids = [i for i, j in id_to_joint.items() if j == target_joint]
-            if target_id not in joint_ids and joint_ids:
-                target_id = joint_ids[0]
+        if target_id in live:
+            target_fix = measure(live[target_id], head_yaw)
+            target_last_seen = t
+        elif (
+            target_fix is not None
+            and live
+            and t - target_last_seen > RELOCK_AFTER
+        ):
+            # Re-acquire without appearance or simulator state: take the track
+            # whose bearing is closest to the last fix we had.
+            tid, box = min(
+                live.items(),
+                key=lambda kv: abs(measure(kv[1], head_yaw)[0] - target_fix[0]),
+            )
+            target_id, target_fix = tid, measure(box, head_yaw)
+            target_last_seen = t
 
         is_target = np.array(
             [int(tid) == target_id for tid in tracked.tracker_id], dtype=bool
@@ -643,7 +652,7 @@ for step in range(n_steps):
         print(
             f"LOG t={t:5.2f} "
             f"mode={policy.behavior_mode or policy.current_policy:9s} "
-            f"det={len(dets)} ids={ids} tgt={target_id}/{target_joint} "
+            f"det={len(dets)} ids={ids} tgt={target_id} "
             f"maxsp={max(track_speed.values(), default=0):.1f}"
         )
 
