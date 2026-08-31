@@ -94,7 +94,8 @@ def detect(seg_frame):
     )
 
 
-frames = []
+out = os.path.join(HERE, "minimal_tracking.mp4")
+writer = imageio.get_writer(out, fps=50, quality=8)
 for step in range(150):
     for _ in range(4):
         mujoco.mj_step(model, data)
@@ -110,8 +111,7 @@ for step in range(150):
         labels = [f"ball #{i}" for i in tracked.tracker_id]
         frame = box_annotator.annotate(frame, tracked)
         frame = label_annotator.annotate(frame, tracked, labels=labels)
-    frames.append(frame)
+    writer.append_data(frame)
 
-out = os.path.join(HERE, "minimal_tracking.mp4")
-imageio.mimwrite(out, frames, fps=50, quality=8)
+writer.close()
 print(f"wrote {out}")

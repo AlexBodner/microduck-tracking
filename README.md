@@ -20,7 +20,7 @@ track.
 pip install trackers
 
 pip install -r requirements.txt
-git clone https://github.com/pollen-robotics/microduck_rl
+git clone https://github.com/pollen-robotics/microduck_rl  # verified at d424a0c
 
 mkdir -p policies && cd policies
 for f in alpha_walking alpha_stand ball_kick_left ball_kick_right alpha_ground_pick; do
@@ -80,7 +80,7 @@ it, so this demo does not close the loop on vision-derived localisation.
 
 ## Does it fit the real robot?
 
-Yes. SORT costs 79 µs per update on an Apple M4 over the demo's real cached
+Yes. SORT costs 73 to 76 µs per update on an Apple M4 over the demo's real cached
 detections, an estimated 2 to 7 ms on Microduck's Cortex-A55, next to the ≈60 ms
 its NPU detector already spends per frame: ≈14 Hz tracked detection end to end.
 Measurements in [hardware-feasibility.md](benchmark/hardware-feasibility.md).

@@ -69,7 +69,8 @@ box_annotator = sv.BoxAnnotator(thickness=3)
 label_annotator = sv.LabelAnnotator(text_scale=0.8, text_thickness=2)
 
 
-frames = []
+out_path = os.path.join(ROOT, "duck_tracking.mp4")
+writer = imageio.get_writer(out_path, fps=50, quality=8)
 for step in range(300):
     u = min(step * 0.02 / 5.0, 1.0)
     pin(BASES[0], 0.0, 0.0, 0.0)
@@ -86,7 +87,7 @@ for step in range(300):
         frame = label_annotator.annotate(
             frame, tracked, labels=[f"duck #{i}" for i in tracked.tracker_id]
         )
-    frames.append(frame)
+    writer.append_data(frame)
 
-imageio.mimwrite(os.path.join(ROOT, "duck_tracking.mp4"), frames, fps=50, quality=8)
-print("wrote duck_tracking.mp4")
+writer.close()
+print(f"wrote {out_path}")

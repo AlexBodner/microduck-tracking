@@ -31,7 +31,9 @@ class DuckDetector:
 
         if not os.path.exists(path):
             print(f"downloading duck_detect.onnx to {path}")
-            urllib.request.urlretrieve(URL, path)
+            partial = path + ".part"
+            urllib.request.urlretrieve(URL, partial)
+            os.replace(partial, path)  # never leave a truncated model behind
         self.session = ort.InferenceSession(path)
         self.confidence = confidence
         self.iou = iou

@@ -55,24 +55,30 @@ Primary numbers replay **real cached detections** from the demo (RF-DETR Nano on
 the duck's head camera, 1800 frames, 3228 detections, mean 1.79 objects/frame,
 max 6; `bench_tracker.py`, 5 repeats):
 
-All three run with matched settings (activation 0.25, 3 consecutive frames,
-minimum IoU 0.3), so the comparison is not decided by defaults:
+All three run with matched settings for the parameters they share (activation
+0.25, 3 consecutive frames, minimum IoU 0.3). ByteTrack keeps its own
+`high_conf_det_threshold` default of 0.6, since that split is what its two-stage
+association exists to exploit; 37% of these detections fall below it.
 
 | Tracker | mean per update | p95 |
 |---|---|---|
-| SORT | 79 µs | 181 µs |
-| SORT + BIoU(2.0) | 67 µs | 117 µs |
-| ByteTrack | 81 µs | 178 µs |
+| SORT | 73-76 µs | 165-175 µs |
+| SORT + BIoU(2.0) | 67-72 µs | 118-126 µs |
+| ByteTrack | 64-68 µs | 167-184 µs |
 
-Run-to-run variation on an idle machine is roughly 5 µs on the mean, so SORT and
-ByteTrack are within noise of each other here and BIoU is genuinely cheaper: its
-wider boxes match more often, so fewer tracklets are left unmatched and predicted
-forward.
+Ranges are the min and max over five runs on an idle machine. At this scale
+(mean 1.79 objects per frame) the three sit within about 10 µs of each other,
+so the ordering is not a meaningful result. Read the table as "all three cost
+well under 100 µs per update", not as a ranking.
 
-On library defaults ByteTrack measures 59 µs, which is a measurement artifact
-rather than a speed advantage: it activates tracks at 0.7 against SORT's 0.25, and
-37% of these detections score below 0.6, so it maintains fewer tracklets on the
-same input. `bench_tracker.py` prints both configurations.
+Two ways to get a misleading ranking out of the same cache, both of which we hit
+before settling on the table above. Forcing ByteTrack's high-confidence
+threshold down to 0.25 so that every parameter "matches" makes it slower (81 µs):
+it then runs one full-size association plus the bookkeeping for a second pass
+that never has anything to do. Leaving both trackers on library defaults makes
+it faster (58-59 µs): it activates tracks at 0.7 against SORT's 0.25, so it
+maintains fewer tracklets on the same input. `bench_tracker.py` prints the
+matched configuration and the defaults side by side.
 
 Scaling with object count, on synthetic 640×360 scenes (2000 frames per cell):
 
@@ -97,7 +103,7 @@ Disk: full demo env 532 MB; a robot-minimal env (numpy, scipy, opencv-headless, 
 No RK3566 was available to measure on, so the CPU numbers must be scaled. The scaling factor comes from Geekbench 6 single-core scores: the RK3566's Cortex-A55 at 1.8 GHz scores ≈210 ([Orange Pi 3B run](https://browser.geekbench.com/v6/cpu/2677440), [Notebookcheck](https://www.notebookcheck.net/Rockchip-RK3566-Processor-Benchmarks-and-Specs.741611.0.html) reports 203) against ≈3,800 for the Apple M4, a ratio of ≈18×. We apply **25×** as the conservative bound, since Geekbench weights vectorizable work more heavily than this mostly scalar association code. Taking that worst case:
 
 - 16 objects, ByteTrack: 291 µs × 25 ≈ **7.3 ms/update**
-- the demo's real detections, SORT: 79 µs mean × 25 ≈ **2.0 ms/update** (p95 181 µs ≈ 4.5 ms)
+- the demo's real detections, SORT: 76 µs mean × 25 ≈ **1.9 ms/update** (p95 175 µs ≈ 4.4 ms)
 
 Against the budget: the detector delivers a frame every ≈60 ms (15 Hz). Even the worst scaled case consumes ≈12 % of one core at that rate, and the robot has four cores, with the control loop needing one. **Compute is not the problem, even before any optimization.** This scaling factor is the one unmeasured link in the chain; a 30-minute benchmark on any RK3566 dev board (≈$40) would close it.
 

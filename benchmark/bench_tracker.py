@@ -8,6 +8,7 @@ through each tracker and reports per-update latency and process memory.
 
 import os
 import resource
+import sys
 import statistics
 import time
 
@@ -24,7 +25,8 @@ CACHE = os.environ.get(
 
 
 def rss_mb():
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024
 
 
 def load_frames():
@@ -84,7 +86,7 @@ MATCHED = dict(
 for name, mk in (
     ("  SORT", lambda: SORTTracker(**MATCHED)),
     ("  SORT + BIoU(2.0)", lambda: SORTTracker(**MATCHED, iou=BIoU(buffer_ratio=2.0))),
-    ("  ByteTrack", lambda: ByteTrackTracker(**MATCHED, high_conf_det_threshold=0.25)),
+    ("  ByteTrack", lambda: ByteTrackTracker(**MATCHED)),
 ):
     mean_us, p95_us = bench(mk, frames)
     print(f"{name:<26} {mean_us:>14.0f} {p95_us:>8.0f}")

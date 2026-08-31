@@ -36,6 +36,7 @@ ROOT = os.path.dirname(HERE)
 RL = os.environ.get("MICRODUCK_RL", os.path.join(ROOT, "microduck_rl"))
 POLICIES = os.environ.get("MICRODUCK_POLICIES", os.path.join(ROOT, "policies"))
 sys.path.insert(0, os.path.join(RL, "scripts"))
+CWD = os.getcwd()  # DUMP_DETECTIONS paths resolve against the caller, not RL
 os.chdir(RL)  # infer_policy uses repo-relative XML paths
 
 from infer_policy import (  # noqa: E402
@@ -48,8 +49,9 @@ FIRST_THROW = 2.5                # the owner's first throw
 MAX_THROWS = 2                   # throws in the video
 RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
 LOCK_WINDOW = 4.0                # seconds after a throw to lock the fast track
-LOCK_SPEED = 4.0                 # px/frame EMA speed that means "thrown"
+LOCK_SPEED = 4.0                 # px per tracked frame that means "thrown"
 TRACK_EVERY = int(os.environ.get("TRACK_EVERY", 1))  # 3 = ~16.7 Hz robot cadence
+LOCK_SPEED *= TRACK_EVERY        # a longer interval moves the ball further
 MAIN_W, MAIN_H = 1280, 720       # chase view canvas
 PANEL_W, PANEL_H = 960, 540      # duck POV render size (annotated, then shrunk)
 INSET_W, INSET_H = 480, 270      # POV picture-in-picture, top-left corner
@@ -156,7 +158,8 @@ policy = PolicyInference(
 
 # The kick trigger snaps the ball to the trained kick spot ("_place_ball") —
 # a visible teleport. We gate kicks tightly around that spot instead and let
-# the policy play the ball where it actually lies.
+# the policy play the ball where it actually lies. This reaches into a
+# private method of microduck_rl, verified against upstream d424a0c.
 policy._place_ball = lambda behavior: None
 
 # Initial pose (mirrors infer_policy.main)
@@ -410,13 +413,16 @@ def match_tracks_to_joints(tracked, det_boxes, det_joints):
             d = (tc[0] - c[0]) ** 2 + (tc[1] - c[1]) ** 2
             if d < best_d:
                 best, best_d = j, d
-        out[int(tid)] = best
+        if best is not None:
+            out[int(tid)] = best
     return out
 
 
 control_dt = 4 * model.opt.timestep
 n_steps = int(SIM_SECONDS / control_dt)
-frames = []
+out = os.path.join(ROOT, "fetch_demo.mp4")
+writer = imageio.get_writer(out, fps=50, quality=8)
+frame_count = 0
 dump_rows = []  # (frame, x1, y1, x2, y2, confidence) when DUMP_DETECTIONS is set
 kick_cooldown = 0.0
 frames_with_tracks = 0
@@ -649,13 +655,16 @@ for step in range(n_steps):
     frame[
         pad + 2 : pad + 2 + INSET_H, MAIN_W - INSET_W - pad - 2 : MAIN_W - pad - 2
     ] = inset
-    frames.append(frame)
+    writer.append_data(frame)
+    frame_count += 1
 
 out = os.path.join(ROOT, "fetch_demo.mp4")
-imageio.mimwrite(out, frames, fps=50, quality=8)
-print(f"wrote {out}: {len(frames)} frames, tracks visible in {frames_with_tracks}")
+writer.close()
+print(f"wrote {out}: {frame_count} frames, tracks visible in {frames_with_tracks}")
 if os.environ.get("DUMP_DETECTIONS"):
     cache = os.environ["DUMP_DETECTIONS"]
+    if not os.path.isabs(cache):
+        cache = os.path.join(CWD, cache)
     np.savez_compressed(
         cache, rows=np.array(dump_rows, dtype=np.float64), n_frames=n_steps
     )
