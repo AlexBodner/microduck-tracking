@@ -38,6 +38,11 @@ project. [`fetch_demo.py`](demos/fetch_demo.py) is the full fetch choreography.
 
 ![Minimal tracking demo](assets/minimal_tracking.gif)
 
+[`duck_tracking.py`](demos/duck_tracking.py) tracks other microducks through
+`duck_detect.onnx`, the exact single-class YOLO the robot ships on its NPU.
+
+![Duck detector tracking](assets/duck_tracking.gif)
+
 ## How it works
 
 **Control.** Pollen's own `PolicyInference` runner and pretrained ONNX policies,
