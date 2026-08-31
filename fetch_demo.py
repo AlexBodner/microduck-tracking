@@ -217,12 +217,23 @@ tracker = SORTTracker(
     iou=BIoU(buffer_ratio=2.0),
 )
 MAGENTA = sv.Color(255, 64, 255)
-GRAY = sv.Color(200, 200, 200)
-target_box = sv.BoxAnnotator(thickness=5, color=MAGENTA)
-target_label = sv.LabelAnnotator(text_scale=0.9, text_thickness=2, color=MAGENTA)
-other_box = sv.BoxAnnotator(thickness=3, color=GRAY)
-other_label = sv.LabelAnnotator(text_scale=0.8, text_thickness=2, color=GRAY)
+GRAY = sv.Color(235, 235, 235)
+target_box = sv.BoxCornerAnnotator(thickness=6, corner_length=18, color=MAGENTA)
+target_label = sv.LabelAnnotator(
+    text_scale=0.9, text_thickness=2, color=MAGENTA,
+    text_position=sv.Position.TOP_CENTER,
+)
+other_box = sv.BoxAnnotator(thickness=2, color=GRAY)
+other_label = sv.LabelAnnotator(text_scale=0.7, text_thickness=2, color=GRAY)
 trace_ann = sv.TraceAnnotator(thickness=4, trace_length=15, color=MAGENTA)
+display_num: dict[int, int] = {}
+
+
+def display_id(tid):
+    tid = int(tid)
+    if tid not in display_num:
+        display_num[tid] = len(display_num) + 1
+    return display_num[tid]
 
 
 # --- optional real detector -------------------------------------------------
@@ -597,13 +608,20 @@ for step in range(n_steps):
             head = trace_ann.annotate(head, tgt)
         if len(rest):
             head = other_box.annotate(head, rest)
-            head = other_label.annotate(
-                head, rest, labels=[f"ball #{i}" for i in rest.tracker_id]
+            mature = np.array(
+                [t - track_birth.get(int(i), t) > 0.6 for i in rest.tracker_id],
+                dtype=bool,
             )
+            if mature.any():
+                head = other_label.annotate(
+                    head,
+                    rest[mature],
+                    labels=[f"#{display_id(i)}" for i in rest[mature].tracker_id],
+                )
         if len(tgt):
             head = target_box.annotate(head, tgt)
             head = target_label.annotate(
-                head, tgt, labels=[f"FETCH ball #{i}" for i in tgt.tracker_id]
+                head, tgt, labels=["FETCH" for _ in tgt.tracker_id]
             )
 
     if os.environ.get("DEBUG_LOG"):

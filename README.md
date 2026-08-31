@@ -35,6 +35,8 @@ DETECTOR=rfdetr python fetch_demo.py
 frames in, `sv.Detections` through `SORTTracker`, IDs out. Copy it into your own
 project. [`fetch_demo.py`](fetch_demo.py) is the full fetch choreography.
 
+![Minimal tracking demo](assets/minimal_tracking.gif)
+
 ## How it works
 
 **Control.** Pollen's own `PolicyInference` runner and pretrained ONNX policies,
