@@ -1,0 +1,5 @@
+trackers>=2.6.0
+mujoco>=3.2
+onnxruntime
+opencv-python
+imageio[ffmpeg]
