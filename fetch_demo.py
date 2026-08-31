@@ -410,20 +410,23 @@ for step in range(n_steps):
                 0.0,
             ]
             at_ball = 0.04 < fwd < 0.15 and abs(left) < 0.10
-            if os.environ.get("DEBUG_LOG") and math.hypot(fwd, left) < 0.35:
-                print(f"NEAR t={t:5.2f} fwd={fwd:+.3f} left={left:+.3f} "
-                      f"cool={kick_cooldown:.1f} grabbed={grabbed_this_throw}")
+            # The (blind) beak pick only reaches ~5-9 cm ahead of the feet, so
+            # demand a closer, straighter park before trying to grab.
+            at_beak = 0.045 < fwd < 0.095 and abs(left) < 0.06
             if at_ball and kick_cooldown == 0.0:
                 if not grabbed_this_throw:
-                    # First reach: duck down and worry the ball with the beak,
-                    # the way a dog gets its mouth on a fresh ball.
-                    grab_settle_until = t + 0.7
-                    grabbed_this_throw = True
+                    if at_beak:
+                        # First reach: duck down and worry the ball with the
+                        # beak, the way a dog gets its mouth on a fresh ball.
+                        grab_settle_until = t + 0.7
+                        grabbed_this_throw = True
+                        kick_cooldown = 4.0
+                    # else: keep walking until the ball sits under the beak
                 else:
                     policy.trigger_behavior(
                         "kick_left" if left > 0 else "kick_right"
                     )
-                kick_cooldown = 4.0
+                    kick_cooldown = 4.0
             else:
                 # The policy only breaks into a gait near its max command, and
                 # turns far better while walking, so always push full speed.
@@ -442,8 +445,12 @@ for step in range(n_steps):
     # Over-the-shoulder chase cam: follow the trunk yaw with smoothing so the
     # third-person view always shows what the duck is walking toward.
     _, yaw_now = trunk_yaw_frame()
-    az_t = math.degrees(yaw_now) + 18.0
-    chase_az += 0.03 * ((az_t - chase_az + 180.0) % 360.0 - 180.0)
+    # Swing to a side view while the duck works the ball with its beak, so
+    # the contact isn't hidden behind its body from the rear camera.
+    picking = policy.ground_pick_mode or grab_settle_until is not None
+    az_offset = 75.0 if picking or t < recover_until else 18.0
+    az_t = math.degrees(yaw_now) + az_offset
+    chase_az += 0.04 * ((az_t - chase_az + 180.0) % 360.0 - 180.0)
     chase.azimuth = chase_az
     main_r.update_scene(data, camera=chase)
     frame = main_r.render()
@@ -530,11 +537,14 @@ for step in range(n_steps):
             f"det={len(dets)} ids={ids} tgt={target_id}/{target_joint}"
         )
 
-    # picture-in-picture: shrunken POV in the top-left (empty sky), thin border
+    # picture-in-picture: shrunken POV in the top-RIGHT, clear of the owner's
+    # hand which enters at the left edge
     inset = cv2.resize(head, (INSET_W, INSET_H), interpolation=cv2.INTER_AREA)
     pad = 12
-    frame[pad : pad + INSET_H + 4, pad : pad + INSET_W + 4] = 30
-    frame[pad + 2 : pad + 2 + INSET_H, pad + 2 : pad + 2 + INSET_W] = inset
+    frame[pad : pad + INSET_H + 4, MAIN_W - INSET_W - pad - 4 : MAIN_W - pad] = 30
+    frame[
+        pad + 2 : pad + 2 + INSET_H, MAIN_W - INSET_W - pad - 2 : MAIN_W - pad - 2
+    ] = inset
     frames.append(frame)
 
 out = os.path.join(HERE, "fetch_demo.mp4")
