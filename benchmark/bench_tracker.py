@@ -73,16 +73,32 @@ print(
     f"mean {statistics.mean(counts):.2f} objects/frame, max {max(counts)}"
 )
 print(f"RSS after imports: {rss_mb():.1f} MB\n")
-print(f"{'tracker':<24} {'mean us/update':>14} {'p95 us':>8}")
-configs = [
-    ("SORT", lambda: SORTTracker(frame_rate=50.0)),
-    (
-        "SORT+BIoU(2.0)",
-        lambda: SORTTracker(frame_rate=50.0, iou=BIoU(buffer_ratio=2.0)),
-    ),
-    ("ByteTrack", lambda: ByteTrackTracker(frame_rate=50.0)),
-]
-for name, mk in configs:
+print(f"{'tracker':<26} {'mean us/update':>14} {'p95 us':>8}")
+print("matched settings (activation 0.25, 3 consecutive frames, min IoU 0.3):")
+MATCHED = dict(
+    frame_rate=50.0,
+    track_activation_threshold=0.25,
+    minimum_consecutive_frames=3,
+    minimum_iou_threshold=0.3,
+)
+for name, mk in (
+    ("  SORT", lambda: SORTTracker(**MATCHED)),
+    ("  SORT + BIoU(2.0)", lambda: SORTTracker(**MATCHED, iou=BIoU(buffer_ratio=2.0))),
+    ("  ByteTrack", lambda: ByteTrackTracker(**MATCHED, high_conf_det_threshold=0.25)),
+):
     mean_us, p95_us = bench(mk, frames)
-    print(f"{name:<24} {mean_us:>14.0f} {p95_us:>8.0f}")
+    print(f"{name:<26} {mean_us:>14.0f} {p95_us:>8.0f}")
+
+print("library defaults, for reference only:")
+for name, mk in (
+    ("  SORT", lambda: SORTTracker(frame_rate=50.0)),
+    ("  ByteTrack", lambda: ByteTrackTracker(frame_rate=50.0)),
+):
+    mean_us, p95_us = bench(mk, frames)
+    print(f"{name:<26} {mean_us:>14.0f} {p95_us:>8.0f}")
+print(
+    "  (ByteTrack defaults activate tracks at 0.7 against SORT's 0.25, so on this\n"
+    "   cache it holds fewer tracklets and looks faster than it is.)"
+)
+
 print(f"\nRSS after sustained tracking: {rss_mb():.1f} MB")

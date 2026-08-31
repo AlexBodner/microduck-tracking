@@ -33,7 +33,7 @@ Adding up the pipeline that actually fits (detector on NPU, tracker on one A55 c
 | Stage | Cost | Source |
 |---|---|---|
 | YOLO11n 320×320 INT8 detection | ~60 ms | Pollen's own on-robot figure (duck-detect) |
-| SORT/ByteTrack update, ≤5 objects | 1.5–4 ms | our benchmark × conservative 25× A55 scaling |
+| SORT update, real cached detections | 2.0–4.5 ms | our benchmark × conservative 25× A55 scaling |
 | Frame grab + preprocessing glue | ~5 ms | duck-detect's post-fix pipeline |
 | **Total** | **~66–70 ms** | **≈ 14 Hz tracked detection** |
 
@@ -55,14 +55,24 @@ Primary numbers replay **real cached detections** from the demo (RF-DETR Nano on
 the duck's head camera, 1800 frames, 3228 detections, mean 1.79 objects/frame,
 max 6; `bench_tracker.py`, 5 repeats):
 
+All three run with matched settings (activation 0.25, 3 consecutive frames,
+minimum IoU 0.3), so the comparison is not decided by defaults:
+
 | Tracker | mean per update | p95 |
 |---|---|---|
-| SORT | 68-72 µs | 158-166 µs |
-| SORT + BIoU(2.0) | 65-66 µs | 117-118 µs |
-| ByteTrack | 53 µs | 125-126 µs |
+| SORT | 79 µs | 181 µs |
+| SORT + BIoU(2.0) | 67 µs | 117 µs |
+| ByteTrack | 81 µs | 178 µs |
 
-Ranges span two runs of the same cache, so they show run-to-run variation on an
-otherwise idle machine rather than a tuning difference.
+Run-to-run variation on an idle machine is roughly 5 µs on the mean, so SORT and
+ByteTrack are within noise of each other here and BIoU is genuinely cheaper: its
+wider boxes match more often, so fewer tracklets are left unmatched and predicted
+forward.
+
+On library defaults ByteTrack measures 59 µs, which is a measurement artifact
+rather than a speed advantage: it activates tracks at 0.7 against SORT's 0.25, and
+37% of these detections score below 0.6, so it maintains fewer tracklets on the
+same input. `bench_tracker.py` prints both configurations.
 
 Scaling with object count, on synthetic 640×360 scenes (2000 frames per cell):
 
@@ -87,7 +97,7 @@ Disk: full demo env 532 MB; a robot-minimal env (numpy, scipy, opencv-headless, 
 No RK3566 was available to measure on, so the CPU numbers must be scaled. The scaling factor comes from Geekbench 6 single-core scores: the RK3566's Cortex-A55 at 1.8 GHz scores ~210 ([Orange Pi 3B run](https://browser.geekbench.com/v6/cpu/2677440), [Notebookcheck](https://www.notebookcheck.net/Rockchip-RK3566-Processor-Benchmarks-and-Specs.741611.0.html) reports 203) against ~3,800 for the Apple M4, a ratio of ~18×. We apply **25×** as the conservative bound, since Geekbench weights vectorizable work more heavily than this mostly scalar association code. Taking that worst case:
 
 - 16 objects, ByteTrack: 291 µs × 25 ≈ **7.3 ms/update**
-- 2 objects (the demo scenario), SORT: 58 µs × 25 ≈ **1.5 ms/update**
+- the demo's real detections, SORT: 79 µs mean × 25 ≈ **2.0 ms/update** (p95 181 µs ≈ 4.5 ms)
 
 Against the budget: the detector delivers a frame every ~60 ms (15 Hz). Even the worst scaled case consumes ~12 % of one core at that rate, and the robot has four cores, with the control loop needing one. **Compute is not the problem, even before any optimization.** This scaling factor is the one unmeasured link in the chain; a 30-minute benchmark on any RK3566 dev board (~$40) would close it.
 
@@ -111,4 +121,4 @@ Against the budget: the detector delivers a frame every ~60 ms (15 Hz). Even the
 
 ## Bottom line
 
-Microduck ships detection with no identity. Our motion trackers close that gap within ~1.5–7 ms and ~kilobytes of state on its CPU. The measured demo (target lock, kick-and-chase, ID persistence through occlusion) is behavior that detection alone cannot express. The honest caveats: the A55 scaling factor is estimated, not measured; Python's ~118 MB RSS is the deployment risk on 1 GB; and anything needing appearance embeddings stays off-board.
+Microduck ships detection with no identity. Our motion trackers close that gap within ~2–7 ms and ~kilobytes of state on its CPU. The measured demo (target lock, kick-and-chase, ID persistence through occlusion) is behavior that detection alone cannot express. The honest caveats: the A55 scaling factor is estimated, not measured; Python's ~118 MB RSS is the deployment risk on 1 GB; and anything needing appearance embeddings stays off-board.
