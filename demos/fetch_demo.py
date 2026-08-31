@@ -367,17 +367,14 @@ def animate_hand(anim, t):
 
 def seg_boxes(seg):
     """Segmentation frame -> (list of xyxy boxes, joint name per box)."""
-    boxes, joints = [], []
-    for gid in BALL_GEOM_IDS:
-        mask = (seg[..., 0] == gid) & (
-            seg[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM)
-        )
-        ys, xs = np.nonzero(mask)
-        if len(xs) < 3:
-            continue
-        boxes.append([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1])
-        joints.append(GEOM_TO_JOINT[gid])
-    return boxes, joints
+    is_geom = seg[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM)
+    masks = np.stack([(seg[..., 0] == gid) & is_geom for gid in BALL_GEOM_IDS])
+    visible = masks.reshape(len(BALL_GEOM_IDS), -1).sum(axis=1) >= 3
+    if not visible.any():
+        return [], []
+    boxes = sv.mask_to_xyxy(masks[visible], coordinate_convention="exclusive")
+    joints = [g for g, v in zip(BALL_GEOM_IDS, visible) if v]
+    return boxes.tolist(), [GEOM_TO_JOINT[g] for g in joints]
 
 
 def detect(head_rgb, boxes, joints):

@@ -81,18 +81,14 @@ label_annotator = sv.LabelAnnotator(text_scale=0.8, text_thickness=2)
 
 
 def detect(seg_frame):
-    boxes = []
-    for gid in BALL_GIDS:
-        mask = (seg_frame[..., 0] == gid) & (
-            seg_frame[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM)
-        )
-        ys, xs = np.nonzero(mask)
-        if len(xs) >= 3:
-            boxes.append([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1])
-    if not boxes:
+    is_geom = seg_frame[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM)
+    masks = np.stack([(seg_frame[..., 0] == gid) & is_geom for gid in BALL_GIDS])
+    visible = masks.reshape(len(BALL_GIDS), -1).sum(axis=1) >= 3
+    if not visible.any():
         return sv.Detections.empty()
+    boxes = sv.mask_to_xyxy(masks[visible], coordinate_convention="exclusive")
     return sv.Detections(
-        xyxy=np.array(boxes, dtype=float),
+        xyxy=boxes.astype(float),
         confidence=np.ones(len(boxes)),
         class_id=np.zeros(len(boxes), dtype=int),
     )

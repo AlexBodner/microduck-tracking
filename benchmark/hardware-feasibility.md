@@ -57,9 +57,12 @@ max 6; `bench_tracker.py`, 5 repeats):
 
 | Tracker | mean per update | p95 |
 |---|---|---|
-| SORT | 68 µs | 158 µs |
-| SORT + BIoU(2.0) | 65 µs | 117 µs |
-| ByteTrack | 53 µs | 126 µs |
+| SORT | 68-72 µs | 158-166 µs |
+| SORT + BIoU(2.0) | 65-66 µs | 117-118 µs |
+| ByteTrack | 53 µs | 125-126 µs |
+
+Ranges span two runs of the same cache, so they show run-to-run variation on an
+otherwise idle machine rather than a tuning difference.
 
 Scaling with object count, on synthetic 640×360 scenes (2000 frames per cell):
 
