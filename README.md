@@ -38,6 +38,18 @@ Writes `fetch_demo.mp4`. `SIM_SECONDS` sets the length, `DEBUG_LOG=1` prints
 per-frame tracking state. `MICRODUCK_RL` / `MICRODUCK_POLICIES` override the
 default sibling-directory locations.
 
+## How the thrown ball is selected
+
+Purely from the tracker's output — no simulator ground truth:
+
+1. Every confirmed track keeps an EMA of its **image-space box-center speed**.
+2. For a few seconds after a throw, the lock rule looks for a track that is
+   both **fast** (EMA ≥ 6 px/frame) and **newborn** (first seen after the
+   throw). Egomotion can make old distractor tracks look fast when the robot
+   turns, but only the throw creates a brand-new fast track.
+3. The best such track's ID becomes the target; the pursuit, gaze, pick, and
+   kick all hang off that ID until the next throw.
+
 ## How it works
 
 All robot control is Pollen's own `PolicyInference` (imported from

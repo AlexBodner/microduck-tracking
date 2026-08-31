@@ -26,6 +26,29 @@ Measured and researched for the "can we use a small RF-DETR?" question:
 
 So: on-device the recipe is *keep the YOLO-class NPU detector, add `trackers` for identity*; RF-DETR is the off-board / development detector. This split is exactly what the demo implements.
 
+## End-to-end pipeline rate on the robot
+
+Adding up the pipeline that actually fits (detector on NPU, tracker on one A55 core):
+
+| Stage | Cost | Source |
+|---|---|---|
+| YOLO11n 320×320 INT8 detection | ~60 ms | Pollen's own on-robot figure (duck-detect) |
+| SORT/ByteTrack update, ≤5 objects | 1.5–4 ms | our benchmark × conservative 25× A55 scaling |
+| Frame grab + preprocessing glue | ~5 ms | duck-detect's post-fix pipeline |
+| **Total** | **~66–70 ms** | **≈ 14 Hz tracked detection** |
+
+The tracker adds ~5 % to the frame budget the detector already spends: on this
+hardware, tracking is effectively free once you have detection.
+
+**Verified at robot cadence**: the fetch demo run with tracker updates every
+3rd frame (16.7 Hz, `TRACK_EVERY=3`, `minimum_consecutive_frames=1`, buffers
+scaled) completes the full loop — lock, pursuit, beak-pick, kick — with the
+lock ID held ~8 s through the approach. The one fragile case at 15 Hz is
+locking a ball in free flight: a ~0.5 s toss yields only ~8 looks, and in our
+test the second in-flight lock failed (it succeeds at 50 Hz). Practical
+mitigations: lock on the roll-out after landing (works), throw gentler, or run
+the detector's full rate only during throw windows.
+
 ## Measured cost of `trackers` (v2.6, this machine: Apple M-series)
 
 Per-`update()` latency on synthetic 640×360 tracking scenes, 2000 frames per cell:

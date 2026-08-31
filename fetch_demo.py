@@ -42,10 +42,13 @@ from infer_policy import (  # noqa: E402
     PolicyInference,
 )
 
-SIM_SECONDS = float(os.environ.get("SIM_SECONDS", 45))
-THROW_TIMES = [3.0, 18.0, 33.0]  # when the owner throws the play ball
+SIM_SECONDS = float(os.environ.get("SIM_SECONDS", 28))
+FIRST_THROW = 2.5                # the owner's first throw
+MAX_THROWS = 2                   # throws in the video
+RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
 LOCK_WINDOW = 4.0                # seconds after a throw to lock the fast track
 LOCK_SPEED = 6.0                 # px/frame EMA speed that means "thrown"
+TRACK_EVERY = int(os.environ.get("TRACK_EVERY", 1))  # 3 = ~16.7 Hz robot cadence
 MAIN_W, MAIN_H = 1280, 720       # chase view canvas
 PANEL_W, PANEL_H = 960, 540      # duck POV render size (annotated, then shrunk)
 INSET_W, INSET_H = 480, 270      # POV picture-in-picture, top-left corner
@@ -65,7 +68,7 @@ for c in spec.cameras:
 for g in spec.worldbody.find_all(mujoco.mjtObj.mjOBJ_GEOM):
     if g.name == "ball_geom":
         g.condim = 6
-        g.friction = [0.5, 0.005, 0.0022]
+        g.friction = [0.5, 0.005, 0.004]
 # Identical DISTRACTOR balls resting in the field. "ball_free" (from the base
 # scene) is the play ball the owner throws.
 DISTRACTOR_POS = [
@@ -86,6 +89,25 @@ for k, (bx, by) in enumerate(DISTRACTOR_POS, start=2):
         friction=[0.5, 0.005, 0.001],
         mass=0.015,
     )
+# The owner's hand: a kinematic (mocap) body that sweeps in from behind the
+# chase camera carrying the ball, releases it, and retracts.
+SKIN = [0.93, 0.77, 0.64, 1.0]
+hand = spec.worldbody.add_body(name="owner_hand", pos=[6.0, 6.0, 0.5], mocap=True)
+hand.add_geom(
+    name="palm", type=mujoco.mjtGeom.mjGEOM_BOX,
+    size=[0.050, 0.042, 0.011], rgba=SKIN, contype=0, conaffinity=0,
+)
+for fi, fy in enumerate((-0.030, -0.010, 0.010, 0.030)):
+    hand.add_geom(
+        name=f"finger{fi}", type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+        fromto=[0.05, fy, 0.004, 0.105, fy * 1.5, 0.018],
+        size=[0.0085, 0, 0], rgba=SKIN, contype=0, conaffinity=0,
+    )
+hand.add_geom(
+    name="thumb", type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+    fromto=[0.01, -0.042, 0.004, 0.045, -0.075, 0.022],
+    size=[0.009, 0, 0], rgba=SKIN, contype=0, conaffinity=0,
+)
 model = spec.compile()
 model.opt.timestep = 0.005
 data = mujoco.MjData(model)
@@ -97,10 +119,16 @@ policy = PolicyInference(
     standing_onnx_path=os.path.join(POLICIES, "alpha_stand.onnx"),
     kick_left_onnx_path=os.path.join(POLICIES, "ball_kick_left.onnx"),
     kick_right_onnx_path=os.path.join(POLICIES, "ball_kick_right.onnx"),
+    ground_pick_onnx_path=os.path.join(POLICIES, "alpha_ground_pick.onnx"),
     new_cmd_obs=True,
     use_projected_gravity=True,
     kick_duration=2.0,
 )
+
+# The kick trigger snaps the ball to the trained kick spot ("_place_ball") —
+# a visible teleport. We gate kicks tightly around that spot instead and let
+# the policy play the ball where it actually lies.
+policy._place_ball = lambda behavior: None
 
 # Initial pose (mirrors infer_policy.main)
 adr = policy._trunk_qpos_adr
@@ -152,9 +180,9 @@ chase.azimuth = 18.0  # steered behind the duck every frame (over-the-shoulder)
 chase_az = 18.0
 
 tracker = SORTTracker(
-    lost_track_buffer=150,
-    frame_rate=50.0,
-    minimum_consecutive_frames=2,
+    lost_track_buffer=150 // TRACK_EVERY,
+    frame_rate=50.0 / TRACK_EVERY,
+    minimum_consecutive_frames=2 if TRACK_EVERY == 1 else 1,
     minimum_iou_threshold=0.05,
     # Buffered IoU: expand boxes for association, so the tiny ball box still
     # matches across the walking head-bob and at long range.
@@ -195,23 +223,57 @@ def ball_relative(joint):
     return c * d[0] - s * d[1], s * d[0] + c * d[1]
 
 
-def throw_play_ball():
-    """Owner's throw: launch the play ball over the duck's shoulder, forward
-    into the field, from just behind the chase camera."""
+HAND_WINDUP = 0.55   # hand sweeps forward carrying the ball
+HAND_RETRACT = 0.6   # hand pulls back after release
+hand_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "owner_hand")
+hand_mid = int(model.body_mocapid[hand_bid])
+throw_anim = None  # dict while the hand is animating
+
+
+def start_throw(t):
+    """Owner's throw: the visible hand sweeps in from behind the duck's left
+    shoulder, carries the ball forward, and releases it gently into the field."""
     trunk_xy, yaw = trunk_yaw_frame()
-    fx, fy = math.cos(yaw), math.sin(yaw)
-    rx, ry = fy, -fx  # the duck's right
+    f = np.array([math.cos(yaw), math.sin(yaw), 0.0])
+    r = np.array([f[1], -f[0], 0.0])  # the duck's right
+    base = np.array([trunk_xy[0], trunk_xy[1], 0.0])
+    return {
+        "t0": t,
+        "start": base - 0.72 * f - 0.30 * r + [0, 0, 0.34],
+        "release": base - 0.38 * f - 0.16 * r + [0, 0, 0.46],
+        "vel": 1.5 * f + 0.28 * r + [0, 0, 1.3],
+        "quat": [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)],
+        "released": False,
+    }
+
+
+def animate_hand(anim, t):
+    """Advance the hand animation; returns False when finished."""
     qadr, vadr = BALLS[PLAY_JOINT]
-    # Start behind the duck's LEFT shoulder, arc diagonally across its view
-    # toward front-right, clearing the (moving) head.
-    data.qpos[qadr + 0] = trunk_xy[0] - 0.50 * fx - 0.30 * rx
-    data.qpos[qadr + 1] = trunk_xy[1] - 0.50 * fy - 0.30 * ry
-    data.qpos[qadr + 2] = 0.50
-    data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
-    data.qvel[vadr : vadr + 6] = 0.0
-    data.qvel[vadr + 0] = 1.5 * fx + 0.45 * rx
-    data.qvel[vadr + 1] = 1.5 * fy + 0.45 * ry
-    data.qvel[vadr + 2] = 0.9
+    dt_ = t - anim["t0"]
+    if dt_ <= HAND_WINDUP:
+        s_ = dt_ / HAND_WINDUP
+        s_ = s_ * s_ * (3 - 2 * s_)  # smoothstep
+        pos = anim["start"] + s_ * (anim["release"] - anim["start"])
+        data.mocap_pos[hand_mid] = pos
+        data.mocap_quat[hand_mid] = anim["quat"]
+        # Ball rides on the palm until release.
+        data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.045]
+        data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
+        data.qvel[vadr : vadr + 6] = 0.0
+        return True
+    if dt_ <= HAND_WINDUP + HAND_RETRACT:
+        if not anim["released"]:
+            anim["released"] = True
+            data.qvel[vadr : vadr + 6] = 0.0
+            data.qvel[vadr : vadr + 3] = anim["vel"]
+        s_ = (dt_ - HAND_WINDUP) / HAND_RETRACT
+        data.mocap_pos[hand_mid] = anim["release"] + s_ * (
+            anim["start"] - anim["release"] + [0, 0, 0.15]
+        )
+        return True
+    data.mocap_pos[hand_mid] = [6.0, 6.0, 0.5]  # park out of sight
+    return False
 
 
 def seg_boxes(seg):
@@ -276,24 +338,63 @@ target_joint = None         # ball joint the locked ID maps to
 id_to_joint: dict[int, str] = {}
 track_speed: dict[int, float] = {}   # tracker_id -> EMA image-space speed
 track_center: dict[int, tuple] = {}  # tracker_id -> last box center
+track_birth: dict[int, float] = {}   # tracker_id -> first time seen
+last_throw_t = -1.0
 throws_done = 0
+next_throw_at = FIRST_THROW
+prev_behavior = None
+grabbed_this_throw = False
 lock_open_until = -1.0      # lock window after each throw
+grab_settle_until = None    # stand still before triggering the (blind) pick
+recover_until = -1.0        # stand still after a pick to absorb the landing
+prev_pick_mode = False
 
 for step in range(n_steps):
     t = step * control_dt
     policy.update_behavior(control_dt)
     kick_cooldown = max(0.0, kick_cooldown - control_dt)
 
-    # The owner throws the play ball at the scheduled times.
-    if throws_done < len(THROW_TIMES) and t >= THROW_TIMES[throws_done]:
-        throw_play_ball()
+    # The owner throws when the duck is free: first at FIRST_THROW, then a
+    # beat after each kick lands (or a timeout if the fetch drags on).
+    if (
+        throws_done < MAX_THROWS
+        and t >= next_throw_at
+        and throw_anim is None
+        and policy.behavior_mode is None
+        and not policy.ground_pick_mode
+    ):
+        throw_anim = start_throw(t)
         throws_done += 1
-        lock_open_until = t + LOCK_WINDOW
+        last_throw_t = t
+        next_throw_at = t + 18.0  # timeout fallback if the fetch never kicks
+        grabbed_this_throw = False
+        lock_open_until = t + LOCK_WINDOW + HAND_WINDUP
         target_id = None    # wait for the new moving track
         target_joint = None
+    if throw_anim is not None and not animate_hand(throw_anim, t):
+        throw_anim = None
 
-    if policy.behavior_mode is None:
-        if target_joint is None:
+    if prev_behavior in ("kick_left", "kick_right") and policy.behavior_mode is None:
+        next_throw_at = t + RETHROW_DELAY  # kick finished: owner throws again
+    prev_behavior = policy.behavior_mode
+    if throws_done and next_throw_at < t - 0.1 and throws_done < MAX_THROWS:
+        pass  # (fallback scheduling handled by the kick-end trigger above)
+    policy.update_ground_pick_phase(control_dt)
+    if prev_pick_mode and not policy.ground_pick_mode:
+        recover_until = t + 1.5  # pick just ended; let the stand policy settle
+    prev_pick_mode = policy.ground_pick_mode
+    if policy.behavior_mode is None and not policy.ground_pick_mode:
+        if grab_settle_until is not None:
+            # The pick policy was trained from a standing start: stop first.
+            policy.set_vel_cmd(0.0, 0.0, 0.0)
+            policy.head_offset[:] = 0.0
+            if t >= grab_settle_until:
+                grab_settle_until = None
+                policy.trigger_ground_pick()
+        elif t < recover_until:
+            policy.set_vel_cmd(0.0, 0.0, 0.0)
+            policy.head_offset[:] = 0.0
+        elif target_joint is None:
             # Waiting for the owner: stand, head level, watch the field.
             policy.set_vel_cmd(0.0, 0.0, 0.0)
             policy.head_offset[:] = [0.0, 0.1, 0.0, 0.0]
@@ -308,14 +409,21 @@ for step in range(n_steps):
                 float(np.clip(err, -0.5, 0.5)),
                 0.0,
             ]
-            if 0.05 < fwd < 0.14 and abs(left) < 0.10 and kick_cooldown == 0.0:
-                # _place_ball moves whatever ball_qpos_adr points at; aim it at
-                # the locked target so the snap-to-foot is on the right ball.
-                policy.ball_qpos_adr, policy.ball_qvel_adr = BALLS[target_joint]
-                policy.trigger_behavior(
-                    "kick_left" if left > 0 else "kick_right"
-                )
-                kick_cooldown = 5.0
+            at_ball = 0.04 < fwd < 0.15 and abs(left) < 0.10
+            if os.environ.get("DEBUG_LOG") and math.hypot(fwd, left) < 0.35:
+                print(f"NEAR t={t:5.2f} fwd={fwd:+.3f} left={left:+.3f} "
+                      f"cool={kick_cooldown:.1f} grabbed={grabbed_this_throw}")
+            if at_ball and kick_cooldown == 0.0:
+                if not grabbed_this_throw:
+                    # First reach: duck down and worry the ball with the beak,
+                    # the way a dog gets its mouth on a fresh ball.
+                    grab_settle_until = t + 0.7
+                    grabbed_this_throw = True
+                else:
+                    policy.trigger_behavior(
+                        "kick_left" if left > 0 else "kick_right"
+                    )
+                kick_cooldown = 4.0
             else:
                 # The policy only breaks into a gait near its max command, and
                 # turns far better while walking, so always push full speed.
@@ -343,9 +451,10 @@ for step in range(n_steps):
     head = np.ascontiguousarray(np.rot90(head_r.render()))
     seg_r.update_scene(data, camera="head_camera", scene_option=head_opt)
     ctrl_boxes, ctrl_joints = seg_boxes(np.rot90(seg_r.render()))
-    dets = detect(head, ctrl_boxes, ctrl_joints)
-    tracked = tracker.update(dets)
-    tracked = tracked[tracked.tracker_id != -1]  # confirmed tracks only
+    if step % TRACK_EVERY == 0:
+        dets = detect(head, ctrl_boxes, ctrl_joints)
+        tracked = tracker.update(dets)
+        tracked = tracked[tracked.tracker_id != -1]  # confirmed tracks only
 
     if len(tracked):
         frames_with_tracks += 1
@@ -357,6 +466,8 @@ for step in range(n_steps):
             tid = int(tid_)
             b = tracked.xyxy[i]
             c = ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+            if tid not in track_birth:
+                track_birth[tid] = t
             if tid in track_center:
                 sp = math.hypot(
                     c[0] - track_center[tid][0], c[1] - track_center[tid][1]
@@ -367,10 +478,15 @@ for step in range(n_steps):
         # Lock: within the window after a throw, adopt the fastest track that
         # clears the motion threshold. No ground truth involved.
         if target_id is None and t <= lock_open_until:
+            # The thrown ball is the track that is BOTH fast and newborn:
+            # egomotion can make old (distractor) tracks look fast, but only
+            # the throw creates a brand-new fast track.
             fast = [
                 (sp, tid)
                 for tid, sp in track_speed.items()
-                if sp >= LOCK_SPEED and tid in id_to_joint
+                if sp >= LOCK_SPEED
+                and tid in id_to_joint
+                and track_birth.get(tid, -1.0) >= last_throw_t
             ]
             if fast:
                 _, target_id = max(fast)
@@ -402,6 +518,12 @@ for step in range(n_steps):
 
     if os.environ.get("DEBUG_LOG"):
         ids = tracked.tracker_id.tolist() if len(tracked) else []
+        bq = BALLS[PLAY_JOINT][0]
+        spd = {k: round(v, 1) for k, v in track_speed.items() if v > 2}
+        print(
+            f"BALL t={t:5.2f} pos=({data.qpos[bq]:+.2f},{data.qpos[bq+1]:+.2f},"
+            f"{data.qpos[bq+2]:+.2f}) fast={spd}"
+        )
         print(
             f"LOG t={t:5.2f} "
             f"mode={policy.behavior_mode or policy.current_policy:9s} "
