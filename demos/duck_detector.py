@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import supervision as sv
 
+PAD_VALUE = 114
 URL = (
     "https://raw.githubusercontent.com/pollen-robotics/microduck/main/"
     "duck-detect/models/duck_detect.onnx"
@@ -43,7 +44,7 @@ class DuckDetector:
         resized = cv2.resize(frame[..., ::-1], None, fx=scale, fy=scale)
         pad_y = (320 - resized.shape[0]) // 2
         pad_x = (320 - resized.shape[1]) // 2
-        canvas = np.full((320, 320, 3), 114, np.uint8)
+        canvas = np.full((320, 320, 3), PAD_VALUE, np.uint8)
         canvas[pad_y : pad_y + resized.shape[0], pad_x : pad_x + resized.shape[1]] = (
             resized
         )
@@ -52,25 +53,12 @@ class DuckDetector:
         keep = conf > self.confidence
         if not keep.any():
             return sv.Detections.empty()
-        xyxy = np.stack(
-            [
-                cx[keep] - w[keep] / 2, cy[keep] - h[keep] / 2,
-                cx[keep] + w[keep] / 2, cy[keep] + h[keep] / 2,
-            ],
-            axis=1,
+        xyxy = sv.xcycwh_to_xyxy(
+            np.stack([cx[keep], cy[keep], w[keep], h[keep]], axis=1)
         )
-        xyxy = (xyxy - [pad_x, pad_y, pad_x, pad_y]) / scale
-        wh = xyxy[:, 2:] - xyxy[:, :2]
-        order = np.array(
-            cv2.dnn.NMSBoxes(
-                np.hstack([xyxy[:, :2], wh]).tolist(),
-                conf[keep].tolist(),
-                self.confidence,
-                self.iou,
-            )
-        ).flatten()
-        return sv.Detections(
-            xyxy=xyxy[order],
-            confidence=conf[keep][order],
-            class_id=np.zeros(len(order), dtype=int),
+        detections = sv.Detections(
+            xyxy=(xyxy - [pad_x, pad_y, pad_x, pad_y]) / scale,
+            confidence=conf[keep],
+            class_id=np.zeros(int(keep.sum()), dtype=int),
         )
+        return detections.with_nms(threshold=self.iou)
