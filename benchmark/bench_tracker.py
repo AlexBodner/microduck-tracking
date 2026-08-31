@@ -31,7 +31,7 @@ def load_frames():
     if not os.path.exists(CACHE):
         raise FileNotFoundError(
             f"{CACHE} not found. Capture it with "
-            "DUMP_DETECTIONS=detections_cache.npz DETECTOR=rfdetr python fetch_demo.py"
+            "DUMP_DETECTIONS=benchmark/detections_cache.npz DETECTOR=rfdetr python demos/fetch_demo.py"
         )
     data = np.load(CACHE)
     rows, n_frames = data["rows"], int(data["n_frames"])

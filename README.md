@@ -29,12 +29,12 @@ done
 cd ..
 
 python minimal_tracking.py
-DETECTOR=rfdetr python fetch_demo.py
+DETECTOR=rfdetr python demos/fetch_demo.py
 ```
 
 [`minimal_tracking.py`](minimal_tracking.py) is the integration seam in ~70 lines:
 frames in, `sv.Detections` through `SORTTracker`, IDs out. Copy it into your own
-project. [`fetch_demo.py`](fetch_demo.py) is the full fetch choreography.
+project. [`fetch_demo.py`](demos/fetch_demo.py) is the full fetch choreography.
 
 ![Minimal tracking demo](assets/minimal_tracking.gif)
 
@@ -58,7 +58,7 @@ through the throw, so image speed alone identifies the thrown ball.
 
 Yes. SORT costs an estimated 1.5 to 7 ms on Microduck's Cortex-A55, next to the
 ~60 ms its NPU detector already spends per frame: ~14 Hz tracked detection
-end to end. Measurements in [hardware-feasibility.md](hardware-feasibility.md).
+end to end. Measurements in [hardware-feasibility.md](benchmark/hardware-feasibility.md).
 
 ## Acknowledgements
 

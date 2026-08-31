@@ -30,10 +30,11 @@ from trackers import SORTTracker
 from trackers.utils.iou import BIoU
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# See README.md: clone pollen-robotics/microduck_rl next to this file and
+ROOT = os.path.dirname(HERE)
+# See README.md: clone pollen-robotics/microduck_rl in the repo root and
 # download the ONNX policies from pollen-robotics/microduck-policies (HF Hub).
-RL = os.environ.get("MICRODUCK_RL", os.path.join(HERE, "microduck_rl"))
-POLICIES = os.environ.get("MICRODUCK_POLICIES", os.path.join(HERE, "policies"))
+RL = os.environ.get("MICRODUCK_RL", os.path.join(ROOT, "microduck_rl"))
+POLICIES = os.environ.get("MICRODUCK_POLICIES", os.path.join(ROOT, "policies"))
 sys.path.insert(0, os.path.join(RL, "scripts"))
 os.chdir(RL)  # infer_policy uses repo-relative XML paths
 
@@ -653,7 +654,7 @@ for step in range(n_steps):
     ] = inset
     frames.append(frame)
 
-out = os.path.join(HERE, "fetch_demo.mp4")
+out = os.path.join(ROOT, "fetch_demo.mp4")
 imageio.mimwrite(out, frames, fps=50, quality=8)
 print(f"wrote {out}: {len(frames)} frames, tracks visible in {frames_with_tracks}")
 if os.environ.get("DUMP_DETECTIONS"):
