@@ -6,3 +6,4 @@ __pycache__/
 *.png
 !assets/*
 !benchmark/detections_cache.npz
+duck_detect.onnx

@@ -57,6 +57,12 @@ the single-class YOLO the robot ships on its NPU.
 
 ![Duck detector tracking](assets/duck_tracking.gif)
 
+[`demos/spiderduck.py`](demos/spiderduck.py) puts three microducks in a ring
+facing each other. Each one runs the shipped detector and its own tracker, so
+every panel is a duck holding ids on the other two.
+
+![Three microducks recognising each other](assets/spiderduck.gif)
+
 ## How it works
 
 **Control.** Pollen's own `PolicyInference` runner and pretrained ONNX policies,
