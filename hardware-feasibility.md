@@ -51,7 +51,17 @@ the detector's full rate only during throw windows.
 
 ## Measured cost of `trackers` (v2.6, this machine: Apple M-series)
 
-Per-`update()` latency on synthetic 640×360 tracking scenes, 2000 frames per cell:
+Primary numbers replay **real cached detections** from the demo (RF-DETR Nano on
+the duck's head camera, 1800 frames, 3228 detections, mean 1.79 objects/frame,
+max 6; `bench_tracker.py`, 5 repeats):
+
+| Tracker | mean per update | p95 |
+|---|---|---|
+| SORT | 68 µs | 158 µs |
+| SORT + BIoU(2.0) | 65 µs | 117 µs |
+| ByteTrack | 53 µs | 126 µs |
+
+Scaling with object count, on synthetic 640×360 scenes (2000 frames per cell):
 
 | Tracker | 1 obj | 2 obj | 8 obj | 16 obj |
 |---|---|---|---|---|

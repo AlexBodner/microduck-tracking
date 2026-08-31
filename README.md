@@ -17,8 +17,9 @@ track.
 ## Quickstart
 
 ```bash
-pip install -r requirements.txt
+pip install trackers
 
+pip install -r requirements.txt
 git clone https://github.com/pollen-robotics/microduck_rl
 
 mkdir -p policies && cd policies

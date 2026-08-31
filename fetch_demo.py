@@ -419,6 +419,7 @@ def match_tracks_to_joints(tracked, det_boxes, det_joints):
 control_dt = 4 * model.opt.timestep
 n_steps = int(SIM_SECONDS / control_dt)
 frames = []
+dump_rows = []  # (frame, x1, y1, x2, y2, confidence) when DUMP_DETECTIONS is set
 kick_cooldown = 0.0
 frames_with_tracks = 0
 target_id = None            # locked tracker ID (the thrown ball's track)
@@ -558,6 +559,9 @@ for step in range(n_steps):
     ctrl_boxes, ctrl_joints = seg_boxes(np.rot90(seg_r.render()))
     if step % TRACK_EVERY == 0:
         dets = detect(head, ctrl_boxes, ctrl_joints)
+        if os.environ.get("DUMP_DETECTIONS"):
+            for box, conf in zip(dets.xyxy, dets.confidence):
+                dump_rows.append((step, *box, conf))
         tracked = tracker.update(dets)
         tracked = tracked[tracked.tracker_id != -1]  # confirmed tracks only
 
@@ -652,3 +656,9 @@ for step in range(n_steps):
 out = os.path.join(HERE, "fetch_demo.mp4")
 imageio.mimwrite(out, frames, fps=50, quality=8)
 print(f"wrote {out}: {len(frames)} frames, tracks visible in {frames_with_tracks}")
+if os.environ.get("DUMP_DETECTIONS"):
+    cache = os.environ["DUMP_DETECTIONS"]
+    np.savez_compressed(
+        cache, rows=np.array(dump_rows, dtype=np.float64), n_frames=n_steps
+    )
+    print(f"wrote {cache}: {len(dump_rows)} detections over {n_steps} frames")

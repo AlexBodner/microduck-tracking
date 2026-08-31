@@ -1,82 +1,88 @@
 #!/usr/bin/env python3
-"""Measure trackers' compute and memory cost for the Microduck hardware review.
+"""Benchmark trackers over real cached detections from the Microduck demo.
 
-Times SORTTracker/ByteTrack update() per frame at several object counts on
-synthetic-but-realistic moving boxes (640x360 frame), and reports process RSS
-after imports and after sustained tracking.
+Replays detections_cache.npz (RF-DETR Nano on the duck's head camera,
+captured with DUMP_DETECTIONS=detections_cache.npz python fetch_demo.py)
+through each tracker and reports per-update latency and process memory.
 """
 
+import os
 import resource
+import statistics
 import time
 
 import numpy as np
+import supervision as sv
+
+from trackers import ByteTrackTracker, SORTTracker
+from trackers.utils.iou import BIoU
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CACHE = os.environ.get(
+    "DETECTIONS_CACHE", os.path.join(HERE, "detections_cache.npz")
+)
 
 
 def rss_mb():
-    ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return ru / (1024 * 1024)  # macOS reports bytes
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
 
 
-rss_start = rss_mb()
-import supervision as sv  # noqa: E402
-
-from trackers import SORTTracker  # noqa: E402
-from trackers.utils.iou import BIoU  # noqa: E402
-
-try:
-    from trackers import ByteTrackTracker as ByteTrack
-except ImportError:
-    ByteTrack = None
-rss_imports = rss_mb()
-
-W, H = 640, 360
-rng = np.random.default_rng(0)
-
-
-def synth_frames(n_obj, n_frames=2000):
-    """Boxes drifting with per-frame jitter, like the duck's head-cam view."""
-    pos = rng.uniform([0, 0], [W - 40, H - 40], size=(n_obj, 2))
-    vel = rng.uniform(-3, 3, size=(n_obj, 2))
-    sizes = rng.uniform(10, 60, size=(n_obj, 1))
-    out = []
-    for _ in range(n_frames):
-        pos += vel + rng.normal(0, 2, size=pos.shape)
-        pos = np.clip(pos, 0, [W - 40, H - 40])
-        xyxy = np.hstack([pos, pos + sizes])
-        out.append(
-            sv.Detections(
-                xyxy=xyxy.copy(),
-                confidence=rng.uniform(0.5, 1.0, n_obj),
-                class_id=np.zeros(n_obj, dtype=int),
-            )
+def load_frames():
+    if not os.path.exists(CACHE):
+        raise FileNotFoundError(
+            f"{CACHE} not found. Capture it with "
+            "DUMP_DETECTIONS=detections_cache.npz DETECTOR=rfdetr python fetch_demo.py"
         )
-    return out
+    data = np.load(CACHE)
+    rows, n_frames = data["rows"], int(data["n_frames"])
+    frames = []
+    for i in range(n_frames):
+        sel = rows[rows[:, 0] == i]
+        if len(sel):
+            frames.append(
+                sv.Detections(
+                    xyxy=sel[:, 1:5].copy(),
+                    confidence=sel[:, 5].copy(),
+                    class_id=np.zeros(len(sel), dtype=int),
+                )
+            )
+        else:
+            frames.append(sv.Detections.empty())
+    return frames
 
 
-def bench(make_tracker, n_obj, n_frames=2000):
-    frames = synth_frames(n_obj, n_frames)
+def bench(make_tracker, frames, repeats=5):
     tracker = make_tracker()
-    for d in frames[:50]:  # warmup
+    for d in frames[:100]:
         tracker.update(d)
-    tracker = make_tracker()
-    t0 = time.perf_counter()
-    for d in frames:
-        tracker.update(d)
-    dt = time.perf_counter() - t0
-    return dt / n_frames * 1e6  # us per update
+    per_update = []
+    for _ in range(repeats):
+        tracker = make_tracker()
+        for d in frames:
+            t0 = time.perf_counter()
+            tracker.update(d)
+            per_update.append(time.perf_counter() - t0)
+    us = [x * 1e6 for x in per_update]
+    return statistics.mean(us), np.percentile(us, 95)
 
 
-print(f"RSS at start: {rss_start:.1f} MB")
-print(f"RSS after imports (numpy+scipy+supervision+trackers): {rss_imports:.1f} MB")
-print()
-print(f"{'tracker':<28} {'objs':>4} {'us/update':>10} {'fps-equiv':>10}")
-configs = [("SORT", lambda: SORTTracker()),
-           ("SORT+BIoU(0.8)", lambda: SORTTracker(iou=BIoU(buffer_ratio=0.8)))]
-if ByteTrack is not None:
-    configs.append(("ByteTrack", lambda: ByteTrack()))
+frames = load_frames()
+counts = [len(d) for d in frames]
+print(
+    f"cache: {len(frames)} frames, {sum(counts)} detections, "
+    f"mean {statistics.mean(counts):.2f} objects/frame, max {max(counts)}"
+)
+print(f"RSS after imports: {rss_mb():.1f} MB\n")
+print(f"{'tracker':<24} {'mean us/update':>14} {'p95 us':>8}")
+configs = [
+    ("SORT", lambda: SORTTracker(frame_rate=50.0)),
+    (
+        "SORT+BIoU(2.0)",
+        lambda: SORTTracker(frame_rate=50.0, iou=BIoU(buffer_ratio=2.0)),
+    ),
+    ("ByteTrack", lambda: ByteTrackTracker(frame_rate=50.0)),
+]
 for name, mk in configs:
-    for n in (1, 2, 8, 16):
-        us = bench(mk, n)
-        print(f"{name:<28} {n:>4} {us:>10.0f} {1e6 / us:>10.0f}")
-print()
-print(f"RSS after sustained tracking: {rss_mb():.1f} MB")
+    mean_us, p95_us = bench(mk, frames)
+    print(f"{name:<24} {mean_us:>14.0f} {p95_us:>8.0f}")
+print(f"\nRSS after sustained tracking: {rss_mb():.1f} MB")
