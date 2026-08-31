@@ -1,6 +1,6 @@
 # Can `trackers` run on Microduck's hardware?
 
-**Verdict: yes for motion-based trackers (SORT / ByteTrack / OC-SORT), with compute to spare: the binding constraint is RAM, not CPU. Appearance-based trackers (DeepSORT, BoT-SORT re-ID, McByte) do not fit on-board.**
+**Verdict: yes for motion-based trackers (SORT / ByteTrack / OC-SORT), with compute to spare. Appearance-based trackers (DeepSORT, BoT-SORT re-ID, McByte) do not fit on-board.**
 
 ## The hardware
 
@@ -9,9 +9,9 @@
 | SoC | Rockchip RK3566, 4× Cortex-A55 @ 1.8 GHz | In-order cores; one core runs the 50 Hz control loop |
 | NPU | 0.8 TOPS (INT8) | Fully consumed by the detector; nothing else runs there |
 | RAM | **1 GB** | Shared with robotd, mediad, tofd, the RL policy runtime |
-| Storage | 32 GB eMMC | Not a constraint (~200 MB for a minimal Python env) |
+| Storage | 32 GB eMMC | Not a constraint (≈200 MB for a minimal Python env) |
 | Camera | Front RGB via `mediad` (WebRTC) + 8×8 ToF | Frames accessible on-board and off-board |
-| Existing vision | `duck-detect`: YOLO11n INT8 RKNN, 320×320, single class, ~60 ms/look after their preprocessing fix | ~15 Hz detection ceiling; **per-frame only, no tracking anywhere in the stack** |
+| Existing vision | `duck-detect`: YOLO11n INT8 RKNN, 320×320, single class, ≈60 ms/look after their preprocessing fix | ≈15 Hz detection ceiling; **per-frame only, no tracking anywhere in the stack** |
 
 ## Which detector feeds the tracker?
 
@@ -19,9 +19,9 @@ Measured and researched for the "can we use a small RF-DETR?" question:
 
 | Detector | Where it runs | Latency | Verdict |
 |---|---|---|---|
-| YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | ~60 ms | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ~1–2 ms more on CPU |
+| YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | ≈60 ms | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ≈1–2 ms more on CPU |
 | RF-DETR Nano (30.5 M params, 384×384) | Apple M4 MacBook Pro | 60 ms measured | Works great off-board; it is what the `DETECTOR=rfdetr` demo mode runs |
-| RF-DETR Nano, split NPU-backbone + CPU-head ([rfdetr-on-rockchip-npu](https://github.com/AlexanderDhoore/rfdetr-on-rockchip-npu)) | **RK3588** (6 TOPS, A76 cores) | **198 ms measured** by that project | ~5 fps on a chip several times stronger than Microduck's |
+| RF-DETR Nano, split NPU-backbone + CPU-head ([rfdetr-on-rockchip-npu](https://github.com/AlexanderDhoore/rfdetr-on-rockchip-npu)) | **RK3588** (6 TOPS, A76 cores) | **198 ms measured** by that project | ≈5 fps on a chip several times stronger than Microduck's |
 | RF-DETR Nano, same split | RK3566 (0.8 TOPS, A55) | est. 0.6–1 s | **Does not fit for live tracking.** DETR attention ops don't convert to RKNN end-to-end; even the split deployment is CPU-bound on the head, and the A55s are far slower than the RK3588's A76s |
 
 So: on-device the recipe is *keep the YOLO-class NPU detector, add `trackers` for identity*; RF-DETR is the off-board / development detector. This split is exactly what the demo implements.
@@ -32,19 +32,19 @@ Adding up the pipeline that actually fits (detector on NPU, tracker on one A55 c
 
 | Stage | Cost | Source |
 |---|---|---|
-| YOLO11n 320×320 INT8 detection | ~60 ms | Pollen's own on-robot figure (duck-detect) |
+| YOLO11n 320×320 INT8 detection | ≈60 ms | Pollen's own on-robot figure (duck-detect) |
 | SORT update, real cached detections | 2.0–4.5 ms | our benchmark × conservative 25× A55 scaling |
-| Frame grab + preprocessing glue | ~5 ms | duck-detect's post-fix pipeline |
-| **Total** | **~66–70 ms** | **≈ 14 Hz tracked detection** |
+| Frame grab + preprocessing glue | ≈5 ms | duck-detect's post-fix pipeline |
+| **Total** | **≈66–70 ms** | **≈ 14 Hz tracked detection** |
 
-The tracker adds ~5 % to the frame budget the detector already spends: on this
+The tracker adds ≈5 % to the frame budget the detector already spends: on this
 hardware, tracking is effectively free once you have detection.
 
 **Verified at robot cadence**: the fetch demo run with tracker updates every
 3rd frame (16.7 Hz, `TRACK_EVERY=3`, `minimum_consecutive_frames=1`, buffers
 scaled) completes the full loop (lock, pursuit, beak-pick, kick) with the
-lock ID held ~8 s through the approach. The one fragile case at 15 Hz is
-locking a ball in free flight: a ~0.5 s toss yields only ~8 looks, and in our
+lock ID held ≈8 s through the approach. The one fragile case at 15 Hz is
+locking a ball in free flight: a ≈0.5 s toss yields only ≈8 looks, and in our
 test the second in-flight lock failed (it succeeds at 50 Hz). Practical
 mitigations: lock on the roll-out after landing (works), throw gentler, or run
 the detector's full rate only during throw windows.
@@ -90,20 +90,16 @@ Memory, same process (macOS `ru_maxrss`):
 | After `import trackers` (pulls numpy, scipy, supervision→cv2) | **112 MB** |
 | After sustained 16-object tracking | 118 MB |
 
-Disk: full demo env 532 MB; a robot-minimal env (numpy, scipy, opencv-headless, supervision, trackers) estimates at ~200 MB, irrelevant against 32 GB.
+Disk: full demo env 532 MB; a robot-minimal env (numpy, scipy, opencv-headless, supervision, trackers) estimates at ≈200 MB, irrelevant against 32 GB.
 
 ## Scaling to the Cortex-A55
 
-No RK3566 was available to measure on, so the CPU numbers must be scaled. The scaling factor comes from Geekbench 6 single-core scores: the RK3566's Cortex-A55 at 1.8 GHz scores ~210 ([Orange Pi 3B run](https://browser.geekbench.com/v6/cpu/2677440), [Notebookcheck](https://www.notebookcheck.net/Rockchip-RK3566-Processor-Benchmarks-and-Specs.741611.0.html) reports 203) against ~3,800 for the Apple M4, a ratio of ~18×. We apply **25×** as the conservative bound, since Geekbench weights vectorizable work more heavily than this mostly scalar association code. Taking that worst case:
+No RK3566 was available to measure on, so the CPU numbers must be scaled. The scaling factor comes from Geekbench 6 single-core scores: the RK3566's Cortex-A55 at 1.8 GHz scores ≈210 ([Orange Pi 3B run](https://browser.geekbench.com/v6/cpu/2677440), [Notebookcheck](https://www.notebookcheck.net/Rockchip-RK3566-Processor-Benchmarks-and-Specs.741611.0.html) reports 203) against ≈3,800 for the Apple M4, a ratio of ≈18×. We apply **25×** as the conservative bound, since Geekbench weights vectorizable work more heavily than this mostly scalar association code. Taking that worst case:
 
 - 16 objects, ByteTrack: 291 µs × 25 ≈ **7.3 ms/update**
 - the demo's real detections, SORT: 79 µs mean × 25 ≈ **2.0 ms/update** (p95 181 µs ≈ 4.5 ms)
 
-Against the budget: the detector delivers a frame every ~60 ms (15 Hz). Even the worst scaled case consumes ~12 % of one core at that rate, and the robot has four cores, with the control loop needing one. **Compute is not the problem, even before any optimization.** This scaling factor is the one unmeasured link in the chain; a 30-minute benchmark on any RK3566 dev board (~$40) would close it.
-
-## RAM is the real constraint
-
-~118 MB of Python runtime on a 1 GB board that already runs the Rust daemon stack (robotd, mediad, configd, tofd, updaterd), the ONNX policy runtime, and buffers WebRTC video. That likely fits today, since the Rust daemons are lean, but it is the number to watch, and it is pure interpreter+library overhead: the tracker state itself is kilobytes.
+Against the budget: the detector delivers a frame every ≈60 ms (15 Hz). Even the worst scaled case consumes ≈12 % of one core at that rate, and the robot has four cores, with the control loop needing one. **Compute is not the problem, even before any optimization.** This scaling factor is the one unmeasured link in the chain; a 30-minute benchmark on any RK3566 dev board (≈$40) would close it.
 
 ## What does NOT fit on-board
 
@@ -117,8 +113,8 @@ Against the budget: the detector delivers a frame every ~60 ms (15 Hz). Even the
 |---|---|---|---|
 | **Off-board**: subscribe to mediad's WebRTC stream, run detector + trackers on a laptop, command via the JSON-RPC socket API | Works today (the sim demo is exactly this pattern) | +20–50 ms network RTT | Right for demos, tutorials, promo content |
 | **On-board Python sidecar**: a `trackd` daemon consuming duck-detect's boxes, speaking the same Unix-socket JSON-RPC as every other client | Small; aarch64 manylinux wheels exist for every dependency | none | Right for a community integration / blog post |
-| **Rust port**: SORT/ByteTrack is a Kalman filter + Hungarian assignment; a `duck-track` crate beside duck-detect, using our clean-room implementations as the reference | Days, not hours | none, ~zero RAM | Right for upstreaming to pollen-robotics |
+| **Rust port**: SORT/ByteTrack is a Kalman filter + Hungarian assignment; a `duck-track` crate beside duck-detect, using our clean-room implementations as the reference | Days, not hours | none, near-zero RAM | Right for upstreaming to pollen-robotics |
 
 ## Bottom line
 
-Microduck ships detection with no identity. Our motion trackers close that gap within ~2–7 ms and ~kilobytes of state on its CPU. The measured demo (target lock, kick-and-chase, ID persistence through occlusion) is behavior that detection alone cannot express. The honest caveats: the A55 scaling factor is estimated, not measured; Python's ~118 MB RSS is the deployment risk on 1 GB; and anything needing appearance embeddings stays off-board.
+Microduck ships detection with no identity. Our motion trackers close that gap within ≈2–7 ms and a few kilobytes of state on its CPU. The measured demo (target lock, kick-and-chase, ID persistence through occlusion) is behavior that detection alone cannot express. The honest caveats: the A55 scaling factor is estimated, not measured; a Python deployment carries ≈118 MB of interpreter and library RSS against the board's 1 GB, where a Rust port would carry almost none; and anything needing appearance embeddings stays off-board.

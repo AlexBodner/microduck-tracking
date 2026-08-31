@@ -76,8 +76,8 @@ through the throw, so image speed alone identifies the thrown ball.
 ## Does it fit the real robot?
 
 Yes. SORT costs 79 µs per update on an Apple M4 over the demo's real cached
-detections, an estimated 2 to 7 ms on Microduck's Cortex-A55, next to the ~60 ms
-its NPU detector already spends per frame: ~14 Hz tracked detection end to end.
+detections, an estimated 2 to 7 ms on Microduck's Cortex-A55, next to the ≈60 ms
+its NPU detector already spends per frame: ≈14 Hz tracked detection end to end.
 Measurements in [hardware-feasibility.md](benchmark/hardware-feasibility.md).
 
 ## Acknowledgements
