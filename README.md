@@ -1,81 +1,90 @@
 # microduck-tracking
 
-[Microduck](https://github.com/pollen-robotics/microduck) ships object *detection*
-(a single-class YOLO11n on its NPU) but no notion of identity: if two identical
-things are in view, or the target moves, there is no "that one, the same one as
-before". This project adds multi-object tracking with
-[`trackers`](https://github.com/roboflow/trackers) and shows what identity buys —
-in the robot's own MuJoCo simulator, with its real pretrained policies.
+Multi-object tracking for the [Microduck](https://github.com/pollen-robotics/microduck)
+biped, built on [`trackers`](https://github.com/roboflow/trackers). Microduck ships
+per-frame object detection (a single-class YOLO11n on its NPU) with no notion of
+identity across frames. This project adds that identity in the robot's own MuJoCo
+simulator, running its real pretrained policies, and shows behavior that only exists
+once objects have stable IDs: locking onto one specific ball among identical ones and
+playing fetch with it.
 
-**The demo: fetch.** The duck stands among identical balls. An animated owner's
-hand lobs one more identical ball into the scene. Every ball carries a track
-ID; the thrown one is singled out purely by its track's image-space velocity —
-no ground truth — and the duck locks that ID, walks to exactly that ball, and
-worries it with its beak (the pretrained blind ground-pick; the beak can't
-physically hold a 70 mm ball — verified by a lift grid test). The hand then
-retrieves the ball and throws again, and the duck re-locks the new fast track.
-"The ball that was just thrown" only exists as a track; no detector can
+If this is useful, the tracking layer is the library:
+[roboflow/trackers](https://github.com/roboflow/trackers), `pip install trackers`.
+
+## What the demo shows
+
+The duck stands among identical orange balls. An animated owner's hand lobs one more
+identical ball into the scene. Every ball carries a track ID from `SORTTracker`; the
+thrown one is singled out purely by its track's image-space velocity, with no simulator
+ground truth. The duck locks that ID, walks to exactly that ball past the identical
+distractors, worries it with its beak, and waits while the hand retrieves the ball and
+throws again. "The ball that was just thrown" only exists as a track. No detector can
 express it.
 
-## Run it
+## Quickstart
 
 ```bash
 pip install -r requirements.txt
 
-# the simulator (used as a library — we import its PolicyInference runner)
 git clone https://github.com/pollen-robotics/microduck_rl
 
-# the pretrained behavior policies
 mkdir -p policies && cd policies
-for f in alpha_walking alpha_stand ball_kick_left ball_kick_right; do
+for f in alpha_walking alpha_stand ball_kick_left ball_kick_right alpha_ground_pick; do
   curl -sLO "https://huggingface.co/pollen-robotics/microduck-policies/resolve/main/$f.onnx"
 done
 cd ..
 
-python fetch_demo.py                    # oracle detections (segmentation renderer)
-DETECTOR=rfdetr python fetch_demo.py    # real RF-DETR Nano on the camera frames
+python minimal_tracking.py
+python fetch_demo.py
+DETECTOR=rfdetr python fetch_demo.py
 ```
 
-Writes `fetch_demo.mp4`. `SIM_SECONDS` sets the length, `DEBUG_LOG=1` prints
-per-frame tracking state. `MICRODUCK_RL` / `MICRODUCK_POLICIES` override the
-default sibling-directory locations.
-
-## How the thrown ball is selected
-
-Purely from the tracker's output — no simulator ground truth:
-
-1. Every confirmed track keeps an EMA of its **image-space box-center speed**.
-2. For a few seconds after a throw, the lock rule looks for a track that is
-   both **fast** (EMA ≥ 6 px/frame) and **newborn** (first seen after the
-   throw). Egomotion can make old distractor tracks look fast when the robot
-   turns, but only the throw creates a brand-new fast track.
-3. The best such track's ID becomes the target; the pursuit, gaze, pick, and
-   kick all hang off that ID until the next throw.
+[`minimal_tracking.py`](minimal_tracking.py) is the integration seam in ~70 lines:
+head-camera frames in, `sv.Detections` through `SORTTracker`, IDs out. Start there to
+add tracking to your own Microduck project. [`fetch_demo.py`](fetch_demo.py) is the
+full fetch choreography and writes `fetch_demo.mp4`. `SIM_SECONDS` sets the length,
+`DEBUG_LOG=1` prints per-frame tracking state, and `MICRODUCK_RL` /
+`MICRODUCK_POLICIES` override the default sibling-directory locations.
 
 ## How it works
 
-All robot control is Pollen's own `PolicyInference` (imported from
-`microduck_rl`), running their ONNX policies at 50 Hz. On top of it:
+**Control.** All robot behavior is Pollen's own `PolicyInference` runner, imported from
+`microduck_rl`, executing their pretrained ONNX policies (walking, standing, ground
+pick) at 50 Hz. Nothing about the robot stack is modified.
 
-1. **Scene surgery** (`MjSpec`): the MJCF head camera points backward with a 90°
-   roll from inside the jaw mesh — re-aimed forward, pitched down, widened.
-   Extra identical balls added, `condim=6` so rolling friction actually applies.
-2. **Behavior**: a small state machine — wait for a throw, lock the fast track,
-   pursue it (gaze is a head-pose command through the policy), kick on arrival.
-3. **Detection** (`detect()`): RF-DETR Nano on the rendered head-camera frames,
-   or the segmentation renderer as a perfect-detector stand-in.
-4. **Tracking**: `SORTTracker` at the full 50 Hz camera rate with
-   `BIoU(buffer_ratio=2.0)` — the walking head-bob moves a 10 px ball box more
-   than its own size between frames, so plain IoU association shatters; buffered
-   IoU holds identity together.
+**Camera.** The MJCF head camera points backward with a 90 degree roll from inside the
+jaw mesh. The demo re-aims it forward via `MjSpec`, pitches it 25 degrees down, and
+widens it to a 90 degree field of view.
 
-## Would it fit the real robot?
+**Detection.** `DETECTOR=rfdetr` runs RF-DETR Nano on the rendered head-camera frames.
+The default uses the simulator's segmentation renderer as a perfect-detector stand-in.
+Control-side ball identification always uses the segmentation boxes, so the detector
+choice only changes what the tracker sees.
 
-Yes — see [hardware-feasibility.md](hardware-feasibility.md) for the measured
-review. Short version: SORT/ByteTrack cost 43–291 µs per update on a laptop,
-an estimated 1.5–7 ms on Microduck's Cortex-A55 — noise next to the ~60 ms the
-NPU detector already spends per frame. RAM (~118 MB for a Python stack on the
-1 GB board) is the number to watch; a Rust port would erase it. RF-DETR Nano
-measured at 198 ms even on an RK3588's NPU+CPU split, so on-device the recipe
-is: keep the YOLO-class NPU detector, add `trackers` for identity. Appearance-
-based trackers (re-ID, McByte) stay off-board.
+**Tracking.** `SORTTracker` runs at the full 50 Hz camera rate with
+`BIoU(buffer_ratio=2.0)`. The walking head-bob moves a 10 px ball box more than its own
+width between frames, which breaks plain IoU association. Buffered IoU expands the
+boxes before matching and holds identity through the bob and at long range.
+
+**Target selection.** Every confirmed track keeps an exponential moving average of its
+box-center speed in image space. After each throw releases, the duck locks the fastest
+track above 4 px/frame. It stands still through the whole throw, so egomotion is
+negligible and image speed alone identifies the thrown ball. The beak touch uses the
+pretrained blind ground pick; a lift grid test (three ball sizes, three positions)
+confirmed the beak cannot hold a 70 mm ball, so the touch is the play.
+
+## Does it fit the real robot?
+
+Yes. [hardware-feasibility.md](hardware-feasibility.md) has the measured review for
+Microduck's RK3566: SORT costs 43 to 291 microseconds per update on an M-series laptop
+(1 to 16 objects, `bench_tracker.py`), an estimated 1.5 to 7 ms on the robot's
+Cortex-A55 cores, next to the ~60 ms its NPU detector already spends per frame. The
+end-to-end tracked-detection rate works out to ~14 Hz. RF-DETR Nano measured 198 ms
+even on an RK3588 NPU+CPU split, so on this hardware the recipe is: keep the YOLO-class
+NPU detector, add `trackers` for identity.
+
+## Acknowledgements
+
+The simulator, robot policies, and the Microduck itself are by
+[Pollen Robotics](https://github.com/pollen-robotics) and Hugging Face. This repo adds
+the tracking layer and the fetch choreography.
