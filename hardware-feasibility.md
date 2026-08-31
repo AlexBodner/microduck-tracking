@@ -20,7 +20,7 @@ Measured and researched for the "can we use a small RF-DETR?" question:
 | Detector | Where it runs | Latency | Verdict |
 |---|---|---|---|
 | YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | ~60 ms | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ~1–2 ms more on CPU |
-| RF-DETR Nano (30.5 M params, 384×384) | Dev machine (M-series) | 60 ms measured | Works great off-board; it is what the `DETECTOR=rfdetr` demo mode runs |
+| RF-DETR Nano (30.5 M params, 384×384) | Apple M4 MacBook Pro | 60 ms measured | Works great off-board; it is what the `DETECTOR=rfdetr` demo mode runs |
 | RF-DETR Nano, split NPU-backbone + CPU-head ([rfdetr-on-rockchip-npu](https://github.com/AlexanderDhoore/rfdetr-on-rockchip-npu)) | **RK3588** (6 TOPS, A76 cores) | **198 ms measured** by that project | ~5 fps on a chip several times stronger than Microduck's |
 | RF-DETR Nano, same split | RK3566 (0.8 TOPS, A55) | est. 0.6–1 s | **Does not fit for live tracking.** DETR attention ops don't convert to RKNN end-to-end; even the split deployment is CPU-bound on the head, and the A55s are far slower than the RK3588's A76s |
 
@@ -49,7 +49,7 @@ test the second in-flight lock failed (it succeeds at 50 Hz). Practical
 mitigations: lock on the roll-out after landing (works), throw gentler, or run
 the detector's full rate only during throw windows.
 
-## Measured cost of `trackers` (v2.6, this machine: Apple M-series)
+## Measured cost of `trackers` (v2.6, Apple M4 MacBook Pro)
 
 Primary numbers replay **real cached detections** from the demo (RF-DETR Nano on
 the duck's head camera, 1800 frames, 3228 detections, mean 1.79 objects/frame,
@@ -81,7 +81,7 @@ Disk: full demo env 532 MB; a robot-minimal env (numpy, scipy, opencv-headless, 
 
 ## Scaling to the Cortex-A55
 
-No RK3566 was available to measure on, so the CPU numbers must be scaled. A conservative single-core factor for numpy-light workloads (in-order A55 @ 1.8 GHz vs an M-series performance core) is **15–25×**. Taking the worst case, 25×:
+No RK3566 was available to measure on, so the CPU numbers must be scaled. The scaling factor comes from Geekbench 6 single-core scores: the RK3566's Cortex-A55 at 1.8 GHz scores ~210 ([Orange Pi 3B run](https://browser.geekbench.com/v6/cpu/2677440), [Notebookcheck](https://www.notebookcheck.net/Rockchip-RK3566-Processor-Benchmarks-and-Specs.741611.0.html) reports 203) against ~3,800 for the Apple M4, a ratio of ~18×. We apply **25×** as the conservative bound, since Geekbench weights vectorizable work more heavily than this mostly scalar association code. Taking that worst case:
 
 - 16 objects, ByteTrack: 291 µs × 25 ≈ **7.3 ms/update**
 - 2 objects (the demo scenario), SORT: 58 µs × 25 ≈ **1.5 ms/update**
