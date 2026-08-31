@@ -223,54 +223,103 @@ def ball_relative(joint):
     return c * d[0] - s * d[1], s * d[0] + c * d[1]
 
 
-HAND_WINDUP = 0.55   # hand sweeps forward carrying the ball
-HAND_RETRACT = 0.6   # hand pulls back after release
+PH_REACH, PH_CARRY, PH_THROW, PH_RETRACT = 0.7, 0.7, 0.55, 0.5
 hand_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "owner_hand")
 hand_mid = int(model.body_mocapid[hand_bid])
 throw_anim = None  # dict while the hand is animating
 
 
+def _smooth(x):
+    x = min(max(x, 0.0), 1.0)
+    return x * x * (3 - 2 * x)
+
+
+def _bezier(p0, p1, p2, u):
+    return (1 - u) ** 2 * p0 + 2 * u * (1 - u) * p1 + u**2 * p2
+
+
 def start_throw(t):
-    """Owner's throw: the visible hand sweeps in from behind the duck's left
-    shoulder, carries the ball forward, and releases it gently into the field."""
+    """Owner's throw, staged: the hand reaches down to wherever the ball lies,
+    carries it back behind the duck, and lobs it underhand into the field."""
     trunk_xy, yaw = trunk_yaw_frame()
     f = np.array([math.cos(yaw), math.sin(yaw), 0.0])
     r = np.array([f[1], -f[0], 0.0])  # the duck's right
     base = np.array([trunk_xy[0], trunk_xy[1], 0.0])
+    qadr = BALLS[PLAY_JOINT][0]
+    ball = data.qpos[qadr : qadr + 3].copy()
+    first = ball[2] < 0 or np.linalg.norm(ball[:2] - base[:2]) > 3.0
+    hold = base - 0.72 * f - 0.30 * r + [0, 0, 0.40]
     return {
         "t0": t,
-        "start": base - 0.72 * f - 0.30 * r + [0, 0, 0.34],
-        "release": base - 0.38 * f - 0.16 * r + [0, 0, 0.46],
+        "yaw": yaw,
+        "first": first,           # first throw: hand enters already holding it
+        "enter": hold + [0, 0, 0.45],
+        "ball0": ball,
+        "hold": hold,
+        "release": base - 0.30 * f - 0.14 * r + [0, 0, 0.50],
         "vel": 1.5 * f + 0.28 * r + [0, 0, 1.3],
-        "quat": [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)],
         "released": False,
     }
+
+
+def _hand_quat(yaw, pitch):
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    # yaw about z composed with pitch about the hand's y (palm tilt)
+    return [cy * cp, -sy * sp, cp * 0 + sp * cy, sy * cp]
 
 
 def animate_hand(anim, t):
     """Advance the hand animation; returns False when finished."""
     qadr, vadr = BALLS[PLAY_JOINT]
     dt_ = t - anim["t0"]
-    if dt_ <= HAND_WINDUP:
-        s_ = dt_ / HAND_WINDUP
-        s_ = s_ * s_ * (3 - 2 * s_)  # smoothstep
-        pos = anim["start"] + s_ * (anim["release"] - anim["start"])
+    yaw = anim["yaw"]
+    hold, rel = anim["hold"], anim["release"]
+
+    if anim["first"]:
+        reach_end = 0.0
+    else:
+        reach_end = PH_REACH + PH_CARRY
+
+    if not anim["first"] and dt_ <= PH_REACH:
+        # Reach: from the entry point down to the resting ball.
+        u = _smooth(dt_ / PH_REACH)
+        pos = anim["enter"] + u * (anim["ball0"] + [0, 0, 0.055] - anim["enter"])
         data.mocap_pos[hand_mid] = pos
-        data.mocap_quat[hand_mid] = anim["quat"]
-        # Ball rides on the palm until release.
+        data.mocap_quat[hand_mid] = _hand_quat(yaw, 0.35 * u)
+        return True
+    if not anim["first"] and dt_ <= reach_end:
+        # Carry: ball rides on the palm back to the hold point.
+        u = _smooth((dt_ - PH_REACH) / PH_CARRY)
+        p0 = anim["ball0"] + [0, 0, 0.055]
+        mid = 0.5 * (p0 + hold) + [0, 0, 0.22]
+        pos = _bezier(p0, mid, hold, u)
+        data.mocap_pos[hand_mid] = pos
+        data.mocap_quat[hand_mid] = _hand_quat(yaw, 0.35 * (1 - u))
         data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.045]
         data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
         data.qvel[vadr : vadr + 6] = 0.0
         return True
-    if dt_ <= HAND_WINDUP + HAND_RETRACT:
+    if dt_ <= reach_end + PH_THROW:
+        # Underhand scoop: dip below the line then sweep up to the release,
+        # wrist rolling from pulled-back to followed-through.
+        u = _smooth((dt_ - reach_end) / PH_THROW)
+        dip = 0.5 * (hold + rel) - [0, 0, 0.16]
+        pos = _bezier(hold, dip, rel, u)
+        data.mocap_pos[hand_mid] = pos
+        data.mocap_quat[hand_mid] = _hand_quat(yaw, -0.45 + 0.8 * u)
+        data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.045]
+        data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
+        data.qvel[vadr : vadr + 6] = 0.0
+        return True
+    if dt_ <= reach_end + PH_THROW + PH_RETRACT:
         if not anim["released"]:
             anim["released"] = True
             data.qvel[vadr : vadr + 6] = 0.0
             data.qvel[vadr : vadr + 3] = anim["vel"]
-        s_ = (dt_ - HAND_WINDUP) / HAND_RETRACT
-        data.mocap_pos[hand_mid] = anim["release"] + s_ * (
-            anim["start"] - anim["release"] + [0, 0, 0.15]
-        )
+        u = _smooth((dt_ - reach_end - PH_THROW) / PH_RETRACT)
+        data.mocap_pos[hand_mid] = rel + u * (anim["enter"] - rel + [0, 0, 0.1])
+        data.mocap_quat[hand_mid] = _hand_quat(yaw, 0.35 * (1 - u))
         return True
     data.mocap_pos[hand_mid] = [6.0, 6.0, 0.5]  # park out of sight
     return False
@@ -365,23 +414,22 @@ for step in range(n_steps):
     ):
         throw_anim = start_throw(t)
         throws_done += 1
-        last_throw_t = t
-        next_throw_at = t + 18.0  # timeout fallback if the fetch never kicks
+        release_t = t + (
+            (0.0 if throw_anim["first"] else PH_REACH + PH_CARRY) + PH_THROW
+        )
+        last_throw_t = release_t
+        lock_open_until = release_t + LOCK_WINDOW
+        next_throw_at = t + 18.0  # timeout fallback if the fetch stalls
         grabbed_this_throw = False
-        lock_open_until = t + LOCK_WINDOW + HAND_WINDUP
         target_id = None    # wait for the new moving track
         target_joint = None
     if throw_anim is not None and not animate_hand(throw_anim, t):
         throw_anim = None
 
-    if prev_behavior in ("kick_left", "kick_right") and policy.behavior_mode is None:
-        next_throw_at = t + RETHROW_DELAY  # kick finished: owner throws again
-    prev_behavior = policy.behavior_mode
-    if throws_done and next_throw_at < t - 0.1 and throws_done < MAX_THROWS:
-        pass  # (fallback scheduling handled by the kick-end trigger above)
     policy.update_ground_pick_phase(control_dt)
     if prev_pick_mode and not policy.ground_pick_mode:
         recover_until = t + 1.5  # pick just ended; let the stand policy settle
+        next_throw_at = t + RETHROW_DELAY  # touch done: the owner retrieves
     prev_pick_mode = policy.ground_pick_mode
     if policy.behavior_mode is None and not policy.ground_pick_mode:
         if grab_settle_until is not None:
@@ -413,20 +461,15 @@ for step in range(n_steps):
             # The (blind) beak pick only reaches ~5-9 cm ahead of the feet, so
             # demand a closer, straighter park before trying to grab.
             at_beak = 0.045 < fwd < 0.095 and abs(left) < 0.06
-            if at_ball and kick_cooldown == 0.0:
-                if not grabbed_this_throw:
-                    if at_beak:
-                        # First reach: duck down and worry the ball with the
-                        # beak, the way a dog gets its mouth on a fresh ball.
-                        grab_settle_until = t + 0.7
-                        grabbed_this_throw = True
-                        kick_cooldown = 4.0
-                    # else: keep walking until the ball sits under the beak
-                else:
-                    policy.trigger_behavior(
-                        "kick_left" if left > 0 else "kick_right"
-                    )
-                    kick_cooldown = 4.0
+            if at_ball and not grabbed_this_throw and at_beak:
+                # Reached it: duck down and worry the ball with the beak, the
+                # way a dog gets its mouth on a fresh ball. The owner then
+                # retrieves it for the next throw.
+                grab_settle_until = t + 0.7
+                grabbed_this_throw = True
+            elif grabbed_this_throw:
+                # Touch done: stand over the ball and wait for the owner.
+                policy.set_vel_cmd(0.0, 0.0, 0.0)
             else:
                 # The policy only breaks into a gait near its max command, and
                 # turns far better while walking, so always push full speed.
@@ -482,18 +525,14 @@ for step in range(n_steps):
                 track_speed[tid] = 0.7 * track_speed.get(tid, 0.0) + 0.3 * sp
             track_center[tid] = c
 
-        # Lock: within the window after a throw, adopt the fastest track that
-        # clears the motion threshold. No ground truth involved.
-        if target_id is None and t <= lock_open_until:
-            # The thrown ball is the track that is BOTH fast and newborn:
-            # egomotion can make old (distractor) tracks look fast, but only
-            # the throw creates a brand-new fast track.
+        # Lock: after the release, adopt the fastest track that clears the
+        # motion threshold. The duck stands still through the whole throw, so
+        # egomotion is negligible and image speed singles out the thrown ball.
+        if target_id is None and last_throw_t <= t <= lock_open_until:
             fast = [
                 (sp, tid)
                 for tid, sp in track_speed.items()
-                if sp >= LOCK_SPEED
-                and tid in id_to_joint
-                and track_birth.get(tid, -1.0) >= last_throw_t
+                if sp >= LOCK_SPEED and tid in id_to_joint
             ]
             if fast:
                 _, target_id = max(fast)

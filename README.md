@@ -7,12 +7,14 @@ before". This project adds multi-object tracking with
 [`trackers`](https://github.com/roboflow/trackers) and shows what identity buys —
 in the robot's own MuJoCo simulator, with its real pretrained policies.
 
-**The demo: fetch.** The duck stands among identical balls. An off-screen owner
-throws one more identical ball through the scene. Every ball carries a track ID;
-the thrown one is singled out purely by its track's image-space velocity — no
-ground truth — and the duck locks that ID and plays with exactly that ball,
-ignoring the identical distractors. Each throw re-locks onto the new moving
-track. "The ball that was just thrown" only exists as a track; no detector can
+**The demo: fetch.** The duck stands among identical balls. An animated owner's
+hand lobs one more identical ball into the scene. Every ball carries a track
+ID; the thrown one is singled out purely by its track's image-space velocity —
+no ground truth — and the duck locks that ID, walks to exactly that ball, and
+worries it with its beak (the pretrained blind ground-pick; the beak can't
+physically hold a 70 mm ball — verified by a lift grid test). The hand then
+retrieves the ball and throws again, and the duck re-locks the new fast track.
+"The ball that was just thrown" only exists as a track; no detector can
 express it.
 
 ## Run it
