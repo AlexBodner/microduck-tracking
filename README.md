@@ -32,14 +32,28 @@ python minimal_tracking.py
 DETECTOR=rfdetr python demos/fetch_demo.py
 ```
 
-[`minimal_tracking.py`](minimal_tracking.py) is the integration seam in ~70 lines:
-frames in, `sv.Detections` through `SORTTracker`, IDs out. Copy it into your own
-project. [`fetch_demo.py`](demos/fetch_demo.py) is the full fetch choreography.
+Tracking is four lines:
+
+```python
+from trackers import SORTTracker
+from trackers.utils.iou import BIoU
+
+tracker = SORTTracker(frame_rate=50.0, iou=BIoU(buffer_ratio=2.0))
+tracked = tracker.update(detections)
+```
+
+`detections` is an `sv.Detections` from any detector, and `tracked.tracker_id`
+carries a stable id per object. Other trackers and options are in the
+[trackers docs](https://trackers.roboflow.com).
+
+[`minimal_tracking.py`](minimal_tracking.py) wires that seam into the MuJoCo
+simulator: head-camera frames in, ids out.
 
 ![Minimal tracking demo](assets/minimal_tracking.gif)
 
-[`duck_tracking.py`](demos/duck_tracking.py) tracks other microducks through
-`duck_detect.onnx`, the exact single-class YOLO the robot ships on its NPU.
+[`demos/fetch_demo.py`](demos/fetch_demo.py) is the full fetch choreography.
+[`demos/duck_tracking.py`](demos/duck_tracking.py) swaps in `duck_detect.onnx`,
+the single-class YOLO the robot ships on its NPU.
 
 ![Duck detector tracking](assets/duck_tracking.gif)
 
