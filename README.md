@@ -29,6 +29,9 @@ done
 cd ..
 
 python minimal_tracking.py
+python demos/fetch_demo.py
+
+pip install rfdetr
 DETECTOR=rfdetr python demos/fetch_demo.py
 ```
 
@@ -71,7 +74,9 @@ own width between frames, and buffered IoU is what holds identity through it.
 
 **Target selection.** Each track keeps an EMA of its box-center speed in image
 space. After a throw releases, the duck locks the fastest track. It stands still
-through the throw, so image speed alone identifies the thrown ball.
+through the throw, so image speed alone identifies the thrown ball. The tracker
+answers which ball; the simulator supplies that ball's position for walking to
+it, so this demo does not close the loop on vision-derived localisation.
 
 ## Does it fit the real robot?
 
