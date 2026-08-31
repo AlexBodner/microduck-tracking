@@ -47,7 +47,7 @@ FIRST_THROW = 2.5                # the owner's first throw
 MAX_THROWS = 2                   # throws in the video
 RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
 LOCK_WINDOW = 4.0                # seconds after a throw to lock the fast track
-LOCK_SPEED = 6.0                 # px/frame EMA speed that means "thrown"
+LOCK_SPEED = 4.0                 # px/frame EMA speed that means "thrown"
 TRACK_EVERY = int(os.environ.get("TRACK_EVERY", 1))  # 3 = ~16.7 Hz robot cadence
 MAIN_W, MAIN_H = 1280, 720       # chase view canvas
 PANEL_W, PANEL_H = 960, 540      # duck POV render size (annotated, then shrunk)
@@ -120,6 +120,7 @@ policy = PolicyInference(
     kick_left_onnx_path=os.path.join(POLICIES, "ball_kick_left.onnx"),
     kick_right_onnx_path=os.path.join(POLICIES, "ball_kick_right.onnx"),
     ground_pick_onnx_path=os.path.join(POLICIES, "alpha_ground_pick.onnx"),
+    ground_pick_period=2.8,  # snappier peck than the 4.0 s default
     new_cmd_obs=True,
     use_projected_gravity=True,
     kick_duration=2.0,
@@ -395,7 +396,8 @@ prev_behavior = None
 grabbed_this_throw = False
 lock_open_until = -1.0      # lock window after each throw
 grab_settle_until = None    # stand still before triggering the (blind) pick
-recover_until = -1.0        # stand still after a pick to absorb the landing
+recover_until = -1.0        # play window after the pick
+play_start = 0.0
 prev_pick_mode = False
 
 for step in range(n_steps):
@@ -428,7 +430,8 @@ for step in range(n_steps):
 
     policy.update_ground_pick_phase(control_dt)
     if prev_pick_mode and not policy.ground_pick_mode:
-        recover_until = t + 1.5  # pick just ended; let the stand policy settle
+        recover_until = t + 1.9  # playful shuffle happens in this window
+        play_start = t
         next_throw_at = t + RETHROW_DELAY  # touch done: the owner retrieves
     prev_pick_mode = policy.ground_pick_mode
     if policy.behavior_mode is None and not policy.ground_pick_mode:
@@ -440,8 +443,22 @@ for step in range(n_steps):
                 grab_settle_until = None
                 policy.trigger_ground_pick()
         elif t < recover_until:
-            policy.set_vel_cmd(0.0, 0.0, 0.0)
-            policy.head_offset[:] = 0.0
+            if grabbed_this_throw:
+                # Post-touch play: admire the ball, then an excited wiggle
+                # while the owner reaches in — a dog asking for the next throw.
+                ph = t - play_start
+                if ph < 0.5:
+                    policy.set_vel_cmd(0.0, 0.0, 0.0)
+                    policy.head_offset[:] = [0.0, 0.45, 0.0, 0.0]
+                elif ph < 1.2:
+                    policy.set_vel_cmd(0.0, 0.0, 0.9)
+                    policy.head_offset[:] = [0.0, 0.2, 0.35, 0.0]
+                else:
+                    policy.set_vel_cmd(0.0, 0.0, -0.9)
+                    policy.head_offset[:] = [0.0, 0.1, -0.2, 0.0]
+            else:
+                policy.set_vel_cmd(0.0, 0.0, 0.0)
+                policy.head_offset[:] = 0.0
         elif target_joint is None:
             # Waiting for the owner: stand, head level, watch the field.
             policy.set_vel_cmd(0.0, 0.0, 0.0)
@@ -465,7 +482,7 @@ for step in range(n_steps):
                 # Reached it: duck down and worry the ball with the beak, the
                 # way a dog gets its mouth on a fresh ball. The owner then
                 # retrieves it for the next throw.
-                grab_settle_until = t + 0.7
+                grab_settle_until = t + 0.5
                 grabbed_this_throw = True
             elif grabbed_this_throw:
                 # Touch done: stand over the ball and wait for the owner.
@@ -522,7 +539,7 @@ for step in range(n_steps):
                 sp = math.hypot(
                     c[0] - track_center[tid][0], c[1] - track_center[tid][1]
                 )
-                track_speed[tid] = 0.7 * track_speed.get(tid, 0.0) + 0.3 * sp
+                track_speed[tid] = 0.5 * track_speed.get(tid, 0.0) + 0.5 * sp
             track_center[tid] = c
 
         # Lock: after the release, adopt the fastest track that clears the
@@ -573,7 +590,8 @@ for step in range(n_steps):
         print(
             f"LOG t={t:5.2f} "
             f"mode={policy.behavior_mode or policy.current_policy:9s} "
-            f"det={len(dets)} ids={ids} tgt={target_id}/{target_joint}"
+            f"det={len(dets)} ids={ids} tgt={target_id}/{target_joint} "
+            f"maxsp={max(track_speed.values(), default=0):.1f}"
         )
 
     # picture-in-picture: shrunken POV in the top-RIGHT, clear of the owner's
