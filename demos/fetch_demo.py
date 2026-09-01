@@ -658,14 +658,10 @@ for step in range(n_steps):
             if fast:
                 _, target_id = max(fast)
 
-        # The track carries identity, the detection carries geometry. A track
-        # coasting on its Kalman prediction still has a box, but that box is
-        # invented, and measuring range from it sends the duck at nothing. So
-        # only a track backed by a detection this frame updates the fix.
         if target_id in live:
-            # The track says which detection is ours; the detection says
-            # where it is. A coasting track still reports a box, but it is a
-            # Kalman guess, so nothing is measured from it.
+            # The track says which detection is ours; the detection says where
+            # it is. A coasting track still reports a box, but it is a Kalman
+            # guess, so nothing is ever measured from it.
             box = detection_for(live[target_id], dets)
             if box is not None:
                 target_fix = measure(box, head_yaw)
