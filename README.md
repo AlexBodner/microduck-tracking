@@ -83,13 +83,16 @@ ball's known 70 mm. The track says which detection is ours and the detection
 says where it is, so nothing is measured from a track coasting on its Kalman
 prediction. Simulator state reaches the owner's hand, never the duck.
 
-The beak reaches 0.15 m ahead of the feet, and both detectors stop resolving the
-ball at about 0.19 m, so the duck walks one fixed 0.3 s step after its last
-sighting before ducking. That lands the ball at 0.14 m: within reach, and far
-enough out that the duck does not walk into it and knock it away first.
+Both detectors stop resolving the ball at about 0.19 m, so after its last
+sighting the duck walks one fixed 0.55 s step before ducking. That length comes
+from counting frames of beak-to-ball contact against a ball placed at known
+offsets: at 0.14 m the beak only grazes it, at 0.08 to 0.12 m it lands on it
+properly, and at 0.06 m the ankles reach the ball first and kick it away. The
+step aims for the middle of that band.
 
-Across six randomised throws the duck reached and pecked the thrown ball in 8
-of 9 attempts, each grab landing 0.137 to 0.145 m from it. One thing the POV
+Across six randomised throws the duck reached and pecked the thrown ball in 11
+of 12 attempts, each grab landing 0.101 to 0.137 m from it, with contact
+confirmed from the simulator's own contact list rather than by eye. One thing the POV
 inset does not show is the moment of contact: Pollen mount the lens low and
 behind the beak, so the peck swings the camera through the ball and the view
 goes briefly empty. Moving the camera forward fixes it and stops it being this

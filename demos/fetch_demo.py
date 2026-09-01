@@ -59,13 +59,13 @@ RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
 LOCK_WINDOW = 8.0                # seconds after a throw to lock the fast track
 LOCK_SPEED = 4.0                 # px per tracked frame that means "thrown"
 BALL_DIAMETER = 0.07             # metres, for range from apparent size
-# The beak pick reaches a ball up to 0.15 m ahead of the feet and misses at
-# 0.17 m, measured by triggering it against a ball at known offsets. Ducking
-# the head far enough down keeps the ball in frame to 0.06 m, so the duck can
-# watch it the whole way in and stop while it is still in reach, instead of
-# walking into it and booting it away.
+# Where to stop, measured by triggering the pick against a ball at known
+# offsets and counting frames of beak-to-ball contact: at 0.14 m the beak
+# only grazes it (34 frames), at 0.08-0.12 it lands on it properly (49-96),
+# and at 0.06 the ankles reach the ball first and kick it. So the duck aims
+# to stop around 0.10 m.
 GRAB_RANGE = 0.20                # range at which both detectors still see it
-CLOSING_STEP = 0.30              # seconds of straight walk before the pick
+CLOSING_STEP = 0.55              # seconds of straight walk before the pick
 STALE_FIX = 0.4                  # seconds without a detection before standing
 TRACK_EVERY = int(os.environ.get("TRACK_EVERY", 1))  # 3 = ~16.7 Hz robot cadence
 LOCK_SPEED *= TRACK_EVERY        # a longer interval moves the ball further
@@ -457,14 +457,32 @@ def measure(box, head_yaw):
     return bearing, FOCAL_PX * BALL_DIAMETER / max(diameter_px, 1.0)
 
 
+grab_ball_pos = None
+
+
 def report_grab(t):
-    """Distance from the beak's target to the ball the owner actually threw."""
+    """Where the thrown ball sits, in the duck's frame, as the beak comes down."""
+    global grab_ball_pos
     trunk_xy, yaw = trunk_yaw_frame()
     qadr = BALLS[PLAY_JOINT][0]
     d = data.qpos[qadr : qadr + 2] - trunk_xy
     c, sn = math.cos(-yaw), math.sin(-yaw)
     fwd, left = c * d[0] - sn * d[1], sn * d[0] + c * d[1]
-    print(f"TRIAL_GRAB t={t:5.1f} play_ball_distance={math.hypot(fwd, left):.3f}")
+    grab_ball_pos = data.qpos[qadr : qadr + 3].copy()
+    print(
+        f"TRIAL_GRAB t={t:5.1f} play_ball_distance={math.hypot(fwd, left):.3f} "
+        f"fwd={fwd:+.3f} left={left:+.3f}"
+    )
+
+
+def report_contact(t):
+    """Did the beak actually move the ball? Displacement since the grab."""
+    if grab_ball_pos is None:
+        return
+    qadr = BALLS[PLAY_JOINT][0]
+    moved = float(np.linalg.norm(data.qpos[qadr : qadr + 2] - grab_ball_pos[:2]))
+    verdict = "TOUCHED" if moved > 0.005 else "MISSED"
+    print(f"TRIAL_PICK t={t:5.1f} ball_moved={moved:.3f} -> {verdict}")
 
 
 control_dt = 4 * model.opt.timestep
@@ -524,6 +542,8 @@ for step in range(n_steps):
 
     policy.update_ground_pick_phase(control_dt)
     if prev_pick_mode and not policy.ground_pick_mode:
+        if TRIAL:
+            report_contact(t)
         recover_until = t + 1.9  # playful shuffle happens in this window
         play_start = t
         next_throw_at = t + RETHROW_DELAY  # touch done: the owner retrieves
