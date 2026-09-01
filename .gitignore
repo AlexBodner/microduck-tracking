@@ -8,3 +8,4 @@ __pycache__/
 !benchmark/detections_cache.npz
 duck_detect.onnx
 .reports/
+.DS_Store
