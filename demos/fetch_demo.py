@@ -56,7 +56,9 @@ RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
 LOCK_WINDOW = 4.0                # seconds after a throw to lock the fast track
 LOCK_SPEED = 4.0                 # px per tracked frame that means "thrown"
 BALL_DIAMETER = 0.07             # metres, for range from apparent size
-RELOCK_AFTER = 0.6               # seconds unseen before re-acquiring
+GRAB_RANGE = 0.17                # measured range at which the beak can reach
+CLOSE_RANGE = 0.30               # a fix this close counts as "almost on it"
+STALE_FIX = 0.4                  # seconds without a detection before acting on it
 TRACK_EVERY = int(os.environ.get("TRACK_EVERY", 1))  # 3 = ~16.7 Hz robot cadence
 LOCK_SPEED *= TRACK_EVERY        # a longer interval moves the ball further
 MAIN_W, MAIN_H = 1280, 720       # chase view canvas
@@ -395,6 +397,25 @@ def detect(head_rgb, boxes):
     )
 
 
+def detection_for(track_box, detections, minimum_iou=0.3):
+    """The detection this track is standing on, or None if it is coasting."""
+    best, best_iou = None, minimum_iou
+    for box in detections.xyxy:
+        wide = min(track_box[2], box[2]) - max(track_box[0], box[0])
+        high = min(track_box[3], box[3]) - max(track_box[1], box[1])
+        if wide <= 0 or high <= 0:
+            continue
+        overlap = wide * high
+        union = (
+            (track_box[2] - track_box[0]) * (track_box[3] - track_box[1])
+            + (box[2] - box[0]) * (box[3] - box[1])
+            - overlap
+        )
+        if union > 0 and overlap / union > best_iou:
+            best, best_iou = box, overlap / union
+    return best
+
+
 def measure(box, head_yaw):
     """Bearing and range to a ball from its box alone.
 
@@ -431,7 +452,7 @@ prev_behavior = None
 grabbed_this_throw = False
 lock_open_until = -1.0      # lock window after each throw
 grab_settle_until = None    # stand still before triggering the (blind) pick
-final_approach_until = None  # blind straight walk once the ball leaves view
+final_approach_until = None  # bounded blind walk after a close fix vanishes
 recover_until = -1.0        # play window after the pick
 play_start = 0.0
 prev_pick_mode = False
@@ -511,24 +532,34 @@ for step in range(n_steps):
                 float(np.clip(err, -0.5, 0.5)),
                 0.0,
             ]
-            # Vision loses the ball below ~0.2 m (it drops under the camera),
-            # but the beak reaches only ~0.07 m ahead of the feet. So the last
-            # good fix starts a short blind walk straight ahead, closing that
-            # gap dead-reckoned, and the pick follows.
-            if final_approach_until is not None:
+            fresh = t - target_last_seen < STALE_FIX
+            centred = abs(err) < 0.35
+            if grabbed_this_throw:
+                # Touch done: stand over the ball and wait for the owner.
+                policy.set_vel_cmd(0.0, 0.0, 0.0)
+            elif final_approach_until is not None:
+                # Last stretch, walked blind. Entered only from a fresh close
+                # fix, so this is closing a known gap, not chasing a guess.
                 policy.set_vel_cmd(lin_vel_x=0.3, lin_vel_y=0.0, ang_vel_z=0.0)
                 policy.head_offset[:] = [0.0, 0.5, 0.0, 0.0]
                 if t >= final_approach_until:
                     final_approach_until = None
                     grab_settle_until = t + 0.4
                     grabbed_this_throw = True
-            elif not grabbed_this_throw and dist < 0.33 and abs(err) < 0.22:
-                # Close and centred: walk the remaining distance blind at the
-                # gait's real ~0.12 m/s, then grab.
-                final_approach_until = t + float(np.clip((dist - 0.10) / 0.12, 0.3, 2.5))
-            elif grabbed_this_throw:
-                # Touch done: stand over the ball and wait for the owner.
-                policy.set_vel_cmd(0.0, 0.0, 0.0)
+            elif fresh and dist < GRAB_RANGE and centred:
+                # Still visible and already in reach: grab straight away.
+                grab_settle_until = t + 0.4
+                grabbed_this_throw = True
+            elif not fresh:
+                if dist < CLOSE_RANGE and centred:
+                    # It vanished under the camera while close and centred, so
+                    # close the remaining gap at the gait's real ~0.12 m/s.
+                    final_approach_until = t + float(
+                        np.clip((dist - 0.08) / 0.12, 0.2, 1.5)
+                    )
+                else:
+                    # Lost it somewhere else entirely: stand and look.
+                    policy.set_vel_cmd(0.0, 0.0, 0.0)
             else:
                 # The policy only breaks into a gait near its max command, and
                 # turns far better while walking, so always push full speed.
@@ -598,22 +629,15 @@ for step in range(n_steps):
             ]
             if fast:
                 _, target_id = max(fast)
+        # The track carries identity, the detection carries geometry. A track
+        # coasting on its Kalman prediction still has a box, but that box is
+        # invented, and measuring range from it sends the duck at nothing. So
+        # only a track backed by a detection this frame updates the fix.
         if target_id in live:
-            target_fix = measure(live[target_id], head_yaw)
-            target_last_seen = t
-        elif (
-            target_fix is not None
-            and live
-            and t - target_last_seen > RELOCK_AFTER
-        ):
-            # Re-acquire without appearance or simulator state: take the track
-            # whose bearing is closest to the last fix we had.
-            tid, box = min(
-                live.items(),
-                key=lambda kv: abs(measure(kv[1], head_yaw)[0] - target_fix[0]),
-            )
-            target_id, target_fix = tid, measure(box, head_yaw)
-            target_last_seen = t
+            box = detection_for(live[target_id], dets)
+            if box is not None:
+                target_fix = measure(box, head_yaw)
+                target_last_seen = t
 
         is_target = np.array(
             [int(tid) == target_id for tid in tracked.tracker_id], dtype=bool

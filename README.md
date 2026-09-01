@@ -76,14 +76,23 @@ own width between frames, and buffered IoU is what holds identity through it.
 space. After a throw releases, the duck locks the fastest track. It stands still
 through the throw, so image speed alone identifies the thrown ball.
 
-**Navigation.** The duck then walks on that track alone. Bearing comes from the
-box centre against a 480 px focal length, range from the box's apparent
-diameter against the ball's known 70 mm, and the head yaw joint puts the
-bearing back in the body frame. Measured against ground truth the bearing is
-within about a degree and the range within a few centimetres. Below roughly
-0.2 m the ball drops out of the camera's view while the beak reaches only
-0.07 m ahead of the feet, so the last good fix starts a short dead-reckoned
-walk to close that gap. Simulator state reaches the owner's hand, never the
+**Navigation.** The duck then walks on that track alone. The track supplies
+identity and the detection under it supplies geometry: bearing from the box
+centre against a 480 px focal length, range from the box's apparent diameter
+against the ball's known 70 mm, and the head yaw joint puts that bearing back
+in the body frame. Logged against ground truth through both fetches, range
+holds within a few centimetres and bearing within a few degrees the whole way
+in, down to the grab at 0.13 m.
+
+The one trap worth knowing: a track coasting on its Kalman prediction still
+reports a box, but that box is invented, and range measured from it sends the
+duck walking at nothing. So a fix is only taken when a detection is actually
+under the track. When the ball finally disappears under the camera, the duck
+closes the last few centimetres blind, timed from the last verified fix, and
+if it loses the ball anywhere else it stands and looks instead of guessing.
+How close it gets before losing sight depends on the detector: the
+segmentation stand-in holds to 0.13 m and RF-DETR to about 0.19 m, and the
+same rule covers both. Simulator state reaches the owner's hand, never the
 duck.
 
 ## Does it fit the real robot?
