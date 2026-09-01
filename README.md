@@ -88,8 +88,8 @@ ball at about 0.19 m, so the duck walks one fixed 0.3 s step after its last
 sighting before ducking. That lands the ball at 0.14 m: within reach, and far
 enough out that the duck does not walk into it and knock it away first.
 
-Across six randomised throws the duck reached and pecked the thrown ball in 10
-of 11 attempts, each grab landing 0.141 to 0.151 m from it. One thing the POV
+Across six randomised throws the duck reached and pecked the thrown ball in 8
+of 9 attempts, each grab landing 0.137 to 0.145 m from it. One thing the POV
 inset does not show is the moment of contact: Pollen mount the lens low and
 behind the beak, so the peck swings the camera through the ball and the view
 goes briefly empty. Moving the camera forward fixes it and stops it being this

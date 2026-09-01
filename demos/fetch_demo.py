@@ -275,6 +275,7 @@ def trunk_yaw_frame():
     return trunk_xy, yaw
 
 
+PH_ENTER = 0.30   # first throw: the hand glides in already holding the ball
 PH_REACH, PH_CARRY, PH_THROW, PH_RETRACT = 0.35, 0.40, 0.30, 0.30
 hand_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "owner_hand")
 hand_mid = int(model.body_mocapid[hand_bid])
@@ -306,7 +307,7 @@ def start_throw(t):
         "t0": t,
         "yaw": yaw,
         "first": first,           # first throw: hand enters already holding it
-        "enter": hold + [0, 0, 0.45],
+        "enter": hold - 0.40 * f + [0, 0, 0.06],
         "ball0": ball,
         "hold": hold,
         "release": base - 0.30 * f - 0.14 * r + [0, 0, 0.50],
@@ -333,15 +334,23 @@ def animate_hand(anim, t):
     yaw = anim["yaw"]
     hold, rel = anim["hold"], anim["release"]
 
-    if anim["first"]:
-        reach_end = 0.0
-    else:
-        reach_end = PH_REACH + PH_CARRY
+    reach_end = PH_ENTER if anim["first"] else PH_REACH + PH_CARRY
 
+    if anim["first"] and dt_ <= PH_ENTER:
+        # First throw: nothing to pick up, so the hand simply glides in from
+        # behind the duck already holding the ball, rather than appearing.
+        u = _smooth(dt_ / PH_ENTER)
+        pos = anim["enter"] + u * (hold - anim["enter"])
+        data.mocap_pos[hand_mid] = pos
+        data.mocap_quat[hand_mid] = _hand_quat(yaw, 0.0)
+        data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.032]
+        data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
+        data.qvel[vadr : vadr + 6] = 0.0
+        return True
     if not anim["first"] and dt_ <= PH_REACH:
         # Reach: from the entry point down to the resting ball.
         u = _smooth(dt_ / PH_REACH)
-        pos = anim["enter"] + u * (anim["ball0"] + [0, 0, 0.055] - anim["enter"])
+        pos = anim["enter"] + u * (anim["ball0"] + [0, 0, 0.038] - anim["enter"])
         data.mocap_pos[hand_mid] = pos
         data.mocap_quat[hand_mid] = _hand_quat(yaw, 0.35 * u)
         return True
@@ -353,7 +362,7 @@ def animate_hand(anim, t):
         pos = _bezier(p0, mid, hold, u)
         data.mocap_pos[hand_mid] = pos
         data.mocap_quat[hand_mid] = _hand_quat(yaw, 0.35 * (1 - u))
-        data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.045]
+        data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.032]
         data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
         data.qvel[vadr : vadr + 6] = 0.0
         return True
@@ -365,7 +374,7 @@ def animate_hand(anim, t):
         pos = _bezier(hold, dip, rel, u)
         data.mocap_pos[hand_mid] = pos
         data.mocap_quat[hand_mid] = _hand_quat(yaw, -0.45 + 0.8 * u)
-        data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.045]
+        data.qpos[qadr : qadr + 3] = pos + [0, 0, 0.032]
         data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
         data.qvel[vadr : vadr + 6] = 0.0
         return True
@@ -375,7 +384,7 @@ def animate_hand(anim, t):
             data.qvel[vadr : vadr + 6] = 0.0
             data.qvel[vadr : vadr + 3] = anim["vel"]
         u = _smooth((dt_ - reach_end - PH_THROW) / PH_RETRACT)
-        data.mocap_pos[hand_mid] = rel + u * (anim["enter"] - rel + [0, 0, 0.1])
+        data.mocap_pos[hand_mid] = rel + u * (anim["enter"] - rel)
         data.mocap_quat[hand_mid] = _hand_quat(yaw, 0.35 * (1 - u))
         return True
     data.mocap_pos[hand_mid] = [6.0, 6.0, 0.5]  # park out of sight
@@ -501,7 +510,7 @@ for step in range(n_steps):
         throw_anim = start_throw(t)
         throws_done += 1
         release_t = t + (
-            (0.0 if throw_anim["first"] else PH_REACH + PH_CARRY) + PH_THROW
+            (PH_ENTER if throw_anim["first"] else PH_REACH + PH_CARRY) + PH_THROW
         )
         last_throw_t = release_t
         lock_open_until = release_t + LOCK_WINDOW
