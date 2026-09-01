@@ -13,7 +13,47 @@ import math
 
 import numpy as np
 
-from vision import detection_for, measure
+from scene.microduck import BALL_DIAMETER, CAMERA_FOV
+
+
+def focal_px(width):
+    """Pixels per radian at the image centre, from the camera's own field of
+    view. The head view renders portrait and is rotated, so the camera's
+    vertical fovy spans the width of the image the tracker sees."""
+    return (width / 2) / math.tan(math.radians(CAMERA_FOV) / 2)
+
+
+def detection_for(track_box, detections, minimum_iou=0.3):
+    """The detection this track is standing on, or None if it is coasting."""
+    best, best_iou = None, minimum_iou
+    for box in detections.xyxy:
+        wide = min(track_box[2], box[2]) - max(track_box[0], box[0])
+        high = min(track_box[3], box[3]) - max(track_box[1], box[1])
+        if wide <= 0 or high <= 0:
+            continue
+        overlap = wide * high
+        union = (
+            (track_box[2] - track_box[0]) * (track_box[3] - track_box[1])
+            + (box[2] - box[0]) * (box[3] - box[1])
+            - overlap
+        )
+        if union > 0 and overlap / union > best_iou:
+            best, best_iou = box, overlap / union
+    return best
+
+
+def measure(box, head_yaw, width, focal):
+    """Bearing and range to a ball, from its box alone.
+
+    A sphere of known diameter gives range from its apparent size. The box
+    centre gives bearing in the head frame, and adding the head yaw joint puts
+    that bearing back in the body frame.
+    """
+    centre_x = (box[0] + box[2]) / 2
+    diameter_px = max(box[2] - box[0], box[3] - box[1])
+    bearing = -math.atan2(centre_x - width / 2, focal) + head_yaw
+    return bearing, focal * BALL_DIAMETER / max(diameter_px, 1.0)
+
 
 LOCK_WINDOW = 8.0     # seconds after a release in which to lock a moving track
 LOCK_SPEED = 4.0      # px per tracked frame that counts as "just thrown"

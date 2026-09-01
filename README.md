@@ -54,12 +54,12 @@ simulator: head-camera frames in, ids out.
 
 ![Minimal tracking demo](assets/minimal_tracking.gif)
 
-[`demos/fetch_demo.py`](demos/fetch_demo.py) is the full fetch choreography:
-the loop itself is short, with the robot and scene in
-[`microduck.py`](demos/microduck.py), the throwing hand in
-[`owner.py`](demos/owner.py), detection and tracking in
-[`vision.py`](demos/vision.py), the control policy in
-[`policy.py`](demos/policy.py), and the rendering in [`view.py`](demos/view.py).
+[`demos/fetch_demo.py`](demos/fetch_demo.py) is the full fetch choreography.
+Its `main()` holds the loop: detect, track, decide, step. Around it,
+[`detection.py`](demos/detection.py) finds the balls,
+[`policy.py`](demos/policy.py) turns tracks into motor commands, and
+[`scene/`](demos/scene) is the world: the robot and its park, the owner's
+hand, and the rendering.
 [`demos/duck_tracking.py`](demos/duck_tracking.py) swaps in `duck_detect.onnx`,
 the single-class YOLO the robot ships on its NPU.
 

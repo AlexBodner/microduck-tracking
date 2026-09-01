@@ -14,7 +14,7 @@ import mujoco
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+ROOT = os.path.dirname(os.path.dirname(HERE))
 # See README.md: clone pollen-robotics/microduck_rl in the repo root and
 # download the ONNX policies from pollen-robotics/microduck-policies (HF Hub).
 RL = os.environ.get("MICRODUCK_RL", os.path.join(ROOT, "microduck_rl"))

@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 
-from microduck import PLAY_JOINT
+from .microduck import PLAY_JOINT
 
 ENTER = 0.30    # first throw: the hand glides in already holding the ball
 REACH = 0.35    # down to the resting ball
