@@ -53,12 +53,17 @@ SIM_SECONDS = float(os.environ.get("SIM_SECONDS", 28))
 FIRST_THROW = 2.5                # the owner's first throw
 MAX_THROWS = 2                   # throws in the video
 RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
-LOCK_WINDOW = 4.0                # seconds after a throw to lock the fast track
+LOCK_WINDOW = 8.0                # seconds after a throw to lock the fast track
 LOCK_SPEED = 4.0                 # px per tracked frame that means "thrown"
 BALL_DIAMETER = 0.07             # metres, for range from apparent size
-GRAB_RANGE = 0.17                # measured range at which the beak can reach
-CLOSE_RANGE = 0.30               # a fix this close counts as "almost on it"
-STALE_FIX = 0.4                  # seconds without a detection before acting on it
+# The beak pick reaches a ball up to 0.15 m ahead of the feet and misses at
+# 0.17 m, measured by triggering it against a ball at known offsets. Ducking
+# the head far enough down keeps the ball in frame to 0.06 m, so the duck can
+# watch it the whole way in and stop while it is still in reach, instead of
+# walking into it and booting it away.
+GRAB_RANGE = 0.20                # range at which both detectors still see it
+CLOSING_STEP = 0.30              # seconds of straight walk before the pick
+STALE_FIX = 0.4                  # seconds without a detection before standing
 TRACK_EVERY = int(os.environ.get("TRACK_EVERY", 1))  # 3 = ~16.7 Hz robot cadence
 LOCK_SPEED *= TRACK_EVERY        # a longer interval moves the ball further
 MAIN_W, MAIN_H = 1280, 720       # chase view canvas
@@ -452,7 +457,7 @@ prev_behavior = None
 grabbed_this_throw = False
 lock_open_until = -1.0      # lock window after each throw
 grab_settle_until = None    # stand still before triggering the (blind) pick
-final_approach_until = None  # bounded blind walk after a close fix vanishes
+closing_until = None        # one fixed step between seeing it and pecking
 recover_until = -1.0        # play window after the pick
 play_start = 0.0
 prev_pick_mode = False
@@ -480,7 +485,7 @@ for step in range(n_steps):
         lock_open_until = release_t + LOCK_WINDOW
         next_throw_at = t + 18.0  # timeout fallback if the fetch stalls
         grabbed_this_throw = False
-        final_approach_until = None
+        closing_until = None
         target_id = None    # wait for the new moving track
         target_fix = None
     if throw_anim is not None and not animate_hand(throw_anim, t):
@@ -537,29 +542,23 @@ for step in range(n_steps):
             if grabbed_this_throw:
                 # Touch done: stand over the ball and wait for the owner.
                 policy.set_vel_cmd(0.0, 0.0, 0.0)
-            elif final_approach_until is not None:
-                # Last stretch, walked blind. Entered only from a fresh close
-                # fix, so this is closing a known gap, not chasing a guess.
+            elif closing_until is not None:
+                # One fixed step to cover the last few centimetres, started
+                # from a detection rather than a guess.
                 policy.set_vel_cmd(lin_vel_x=0.3, lin_vel_y=0.0, ang_vel_z=0.0)
-                policy.head_offset[:] = [0.0, 0.5, 0.0, 0.0]
-                if t >= final_approach_until:
-                    final_approach_until = None
-                    grab_settle_until = t + 0.4
+                if t >= closing_until:
+                    closing_until = None
+                    grab_settle_until = t + 0.3
                     grabbed_this_throw = True
             elif fresh and dist < GRAB_RANGE and centred:
-                # Still visible and already in reach: grab straight away.
-                grab_settle_until = t + 0.4
-                grabbed_this_throw = True
+                # Seen, close and lined up. The ball sits a few centimetres
+                # beyond the beak at the range both detectors still resolve, so
+                # walk one fixed step before ducking rather than stopping here.
+                closing_until = t + CLOSING_STEP
             elif not fresh:
-                if dist < CLOSE_RANGE and centred:
-                    # It vanished under the camera while close and centred, so
-                    # close the remaining gap at the gait's real ~0.12 m/s.
-                    final_approach_until = t + float(
-                        np.clip((dist - 0.08) / 0.12, 0.2, 1.5)
-                    )
-                else:
-                    # Lost it somewhere else entirely: stand and look.
-                    policy.set_vel_cmd(0.0, 0.0, 0.0)
+                # No detection under the target: stand and look rather than
+                # walk on a guess.
+                policy.set_vel_cmd(0.0, 0.0, 0.0)
             else:
                 # The policy only breaks into a gait near its max command, and
                 # turns far better while walking, so always push full speed.

@@ -84,16 +84,17 @@ in the body frame. Logged against ground truth through both fetches, range
 holds within a few centimetres and bearing within a few degrees the whole way
 in, down to the grab at 0.13 m.
 
-The one trap worth knowing: a track coasting on its Kalman prediction still
-reports a box, but that box is invented, and range measured from it sends the
-duck walking at nothing. So a fix is only taken when a detection is actually
-under the track. When the ball finally disappears under the camera, the duck
-closes the last few centimetres blind, timed from the last verified fix, and
-if it loses the ball anywhere else it stands and looks instead of guessing.
-How close it gets before losing sight depends on the detector: the
-segmentation stand-in holds to 0.13 m and RF-DETR to about 0.19 m, and the
-same rule covers both. Simulator state reaches the owner's hand, never the
-duck.
+Two things make that work rather than wander. A track coasting on its Kalman
+prediction still reports a box, but that box is invented, and range measured
+from it sends the duck walking at nothing, so a fix is only taken when a
+detection is actually under the track; without one the duck stands and looks.
+And the beak reaches a ball up to 0.15 m ahead of the feet and misses at
+0.17 m, measured by triggering the pick against a ball at known offsets, while
+both detectors stop resolving the ball at about 0.19 m. So the duck walks one
+fixed 0.3 s step after its last sighting and then ducks, which lands the ball
+at 0.14 m: inside the beak's reach, and far enough out that the duck does not
+walk into the ball and knock it away first. Simulator state reaches the
+owner's hand, never the duck.
 
 ## Does it fit the real robot?
 
