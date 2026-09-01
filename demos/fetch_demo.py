@@ -50,10 +50,10 @@ from infer_policy import (  # noqa: E402
 )
 
 SIM_SECONDS = float(os.environ.get("SIM_SECONDS", 28))
-THROW_SEED = int(os.environ.get("THROW_SEED", 0))   # vary where throws land
+THROW_SEED = int(os.environ.get("THROW_SEED", 1))   # vary where throws land
 HEADLESS = bool(os.environ.get("HEADLESS"))         # skip video for batch runs
 TRIAL = bool(os.environ.get("TRIAL"))               # report each grab
-FIRST_THROW = 2.5                # the owner's first throw
+FIRST_THROW = 1.2                # the owner's first throw
 MAX_THROWS = 2                   # throws in the video
 RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
 LOCK_WINDOW = 8.0                # seconds after a throw to lock the fast track
@@ -110,6 +110,10 @@ for c in spec.cameras:
         th = math.radians(25)
         c.quat = [math.cos(th / 2), 0, math.sin(th / 2), 0]
         c.fovy = 90
+        # The lens stays where Pollen mounts it. That puts it on the beak's
+        # arc, so during the peck it passes through the ball and the view goes
+        # briefly empty; moving it forward would avoid that but would stop
+        # being this robot's camera.
 # Rolling friction so thrown/kicked balls settle within ~1 m (condim=6
 # activates it; the default condim=3 silently ignores the coefficient).
 for g in spec.worldbody.find_all(mujoco.mjtObj.mjOBJ_GEOM):
@@ -271,7 +275,7 @@ def trunk_yaw_frame():
     return trunk_xy, yaw
 
 
-PH_REACH, PH_CARRY, PH_THROW, PH_RETRACT = 0.7, 0.7, 0.55, 0.5
+PH_REACH, PH_CARRY, PH_THROW, PH_RETRACT = 0.35, 0.40, 0.30, 0.30
 hand_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "owner_hand")
 hand_mid = int(model.body_mocapid[hand_bid])
 throw_anim = None  # dict while the hand is animating

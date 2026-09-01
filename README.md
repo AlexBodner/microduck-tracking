@@ -89,7 +89,11 @@ sighting before ducking. That lands the ball at 0.14 m: within reach, and far
 enough out that the duck does not walk into it and knock it away first.
 
 Across six randomised throws the duck reached and pecked the thrown ball in 10
-of 11 attempts, each grab landing 0.138 to 0.154 m from it. Reproduce with
+of 11 attempts, each grab landing 0.141 to 0.151 m from it. One thing the POV
+inset does not show is the moment of contact: Pollen mount the lens low and
+behind the beak, so the peck swings the camera through the ball and the view
+goes briefly empty. Moving the camera forward fixes it and stops it being this
+robot's camera, so it stays where it is. Reproduce with
 `THROW_SEED=<n> TRIAL=1 HEADLESS=1 python demos/fetch_demo.py`. That is with the
 segmentation stand-in; RF-DETR is weaker here, padding boxes and often missing
 the ball in flight, so the duck sometimes never re-locks after a throw. The lock
