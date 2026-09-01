@@ -20,7 +20,7 @@ Measured and researched for the "can we use a small RF-DETR?" question:
 | Detector | Where it runs | Latency | Verdict |
 |---|---|---|---|
 | YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | ≈60 ms | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ≈1–2 ms more on CPU |
-| RF-DETR Nano (30.5 M params, 384×384) | Apple M4 MacBook Pro | 60 ms measured | Works great off-board; it is what the `DETECTOR=rfdetr` demo mode runs |
+| RF-DETR Nano (30.5 M params, 384×384) | Apple M4 MacBook Pro, CPU | 33 ms measured (median 33, p95 35, idle machine) | ≈30 fps off-board; it is what the `DETECTOR=rfdetr` demo mode runs |
 | RF-DETR Nano, split NPU-backbone + CPU-head ([rfdetr-on-rockchip-npu](https://github.com/AlexanderDhoore/rfdetr-on-rockchip-npu)) | **RK3588** (6 TOPS, A76 cores) | **198 ms measured** by that project | ≈5 fps on a chip several times stronger than Microduck's |
 | RF-DETR Nano, same split | RK3566 (0.8 TOPS, A55) | est. 0.6–1 s | **Does not fit for live tracking.** DETR attention ops don't convert to RKNN end-to-end; even the split deployment is CPU-bound on the head, and the A55s are far slower than the RK3588's A76s |
 
