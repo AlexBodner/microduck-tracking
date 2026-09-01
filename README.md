@@ -76,42 +76,25 @@ own width between frames, and buffered IoU is what holds identity through it.
 space. After a throw releases, the duck locks the fastest track. It stands still
 through the throw, so image speed alone identifies the thrown ball.
 
-**Navigation.** The duck then walks on that track alone. The track supplies
-identity and the detection under it supplies geometry: bearing from the box
-centre against a 480 px focal length, range from the box's apparent diameter
-against the ball's known 70 mm, and the head yaw joint puts that bearing back
-in the body frame. Logged against ground truth through both fetches, range
-holds within a few centimetres and bearing within a few degrees the whole way
-in, down to the grab at 0.13 m.
+**Navigation.** From the camera image and the tracked ball's position in it, the
+duck works out which way to turn and how far away the ball is, and walks there:
+bearing from the box centre, range from the box's apparent diameter against the
+ball's known 70 mm. The track says which detection is ours and the detection
+says where it is, so nothing is measured from a track coasting on its Kalman
+prediction. Simulator state reaches the owner's hand, never the duck.
 
-The division of labour is the whole idea: the track says which detection is
-ours, and the detection says where it is. Nothing is measured from a track
-that is coasting on its Kalman prediction. We tried steering from the
-predicted box to ride out detection gaps, and across six randomised throws it
-changed not one grab, so it came back out. A track coasting on its Kalman
-prediction still reports a box, but that box is invented, and range measured
-from it sends the duck walking at nothing, so a fix is only taken when a
-detection is actually under the track; without one the duck stands and looks.
-And the beak reaches a ball up to 0.15 m ahead of the feet and misses at
-0.17 m, measured by triggering the pick against a ball at known offsets, while
-both detectors stop resolving the ball at about 0.19 m. So the duck walks one
-fixed 0.3 s step after its last sighting and then ducks, which lands the ball
-at 0.14 m: inside the beak's reach, and far enough out that the duck does not
-walk into the ball and knock it away first. Simulator state reaches the
-owner's hand, never the duck.
+The beak reaches 0.15 m ahead of the feet, and both detectors stop resolving the
+ball at about 0.19 m, so the duck walks one fixed 0.3 s step after its last
+sighting before ducking. That lands the ball at 0.14 m: within reach, and far
+enough out that the duck does not walk into it and knock it away first.
 
-Reproduce it with `THROW_SEED=<n> TRIAL=1 HEADLESS=1 python demos/fetch_demo.py`,
-which varies where the owner throws, skips rendering, and prints how far the
-thrown ball was when the beak came down.
-
-Across six randomised throws (`THROW_SEED`), the duck reached and pecked the
-thrown ball in 10 of 11 attempts, every grab landing 0.138 to 0.154 m from it.
-That is with the segmentation stand-in. RF-DETR is noticeably weaker here: on
-these renders it pads boxes, flickers on the distractors, and often misses the
-ball in flight, so the duck sometimes never re-locks after a throw. The lock
-deliberately has no fallback for that case, because every fallback we tried
-locked onto detector flicker, and fetching the wrong ball is a worse failure
-than fetching none.
+Across six randomised throws the duck reached and pecked the thrown ball in 10
+of 11 attempts, each grab landing 0.138 to 0.154 m from it. Reproduce with
+`THROW_SEED=<n> TRIAL=1 HEADLESS=1 python demos/fetch_demo.py`. That is with the
+segmentation stand-in; RF-DETR is weaker here, padding boxes and often missing
+the ball in flight, so the duck sometimes never re-locks after a throw. The lock
+has no fallback for that on purpose: every fallback we tried locked onto
+detector flicker, and fetching the wrong ball is worse than fetching none.
 
 ## Does it fit the real robot?
 
