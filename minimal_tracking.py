@@ -14,7 +14,6 @@ import imageio.v2 as imageio
 import mujoco
 import numpy as np
 import supervision as sv
-
 from trackers import SORTTracker
 from trackers.utils.iou import BIoU
 

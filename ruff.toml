@@ -1,0 +1,10 @@
+line-length = 90
+
+[lint]
+# E402 is enabled on purpose: several scripts import from microduck_rl only
+# after putting it on sys.path, and those imports carry an explicit noqa.
+select = ["E", "F", "I", "W", "RUF"]
+
+[lint.isort]
+# These are this repo's own modules, imported by path rather than installed.
+known-first-party = ["detection", "duck_detector", "policy", "scene"]

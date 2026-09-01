@@ -21,13 +21,12 @@ import math
 import os
 
 import numpy as np
-
 from trackers import SORTTracker
 from trackers.utils.iou import BIoU
 
 from detection import BallDetector
 from policy import FetchPolicy, focal_px
-from scene import CWD, ROOT, Microduck, Owner, View, PANEL_W
+from scene import CWD, PANEL_W, ROOT, Microduck, Owner, View
 
 SIM_SECONDS = float(os.environ.get("SIM_SECONDS", 28))
 THROW_SEED = int(os.environ.get("THROW_SEED", 3))    # where the throws land

@@ -95,9 +95,13 @@ offsets: at 0.14 m the beak only grazes it, at 0.08 to 0.12 m it lands on it
 properly, and at 0.06 m the ankles reach the ball first and kick it away. The
 step aims for the middle of that band.
 
-Across six randomised throws the duck reached and pecked the thrown ball on
-every attempt, each grab landing 0.112 to 0.137 m from it, with contact
-confirmed from the simulator's own contact list rather than by eye. One thing the POV
+Across six randomised seeds, eleven throws, the duck pecked and moved the ball
+on seven, contact confirmed from the simulator's own contact list rather than by
+eye. Those seven land 0.110 to 0.137 m from it. The four failures share a cause:
+the last range fix came off a lookalike instead of the target, so the duck
+commits its blind step on a bad number and pecks 0.13 to 0.75 m short. Spacing
+the lookalikes further apart hides that, at the cost of the thing the demo is
+for. One thing the POV
 inset does not show is the moment of contact: Pollen mount the lens low and
 behind the beak, so the peck swings the camera through the ball and the view
 goes briefly empty. Moving the camera forward fixes it and stops it being this

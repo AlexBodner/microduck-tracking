@@ -4,4 +4,4 @@ from .microduck import CWD, ROOT, Microduck
 from .owner import Owner
 from .view import PANEL_W, View
 
-__all__ = ["CWD", "ROOT", "Microduck", "Owner", "PANEL_W", "View"]
+__all__ = ["CWD", "PANEL_W", "ROOT", "Microduck", "Owner", "View"]

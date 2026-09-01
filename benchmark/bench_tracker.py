@@ -2,19 +2,19 @@
 """Benchmark trackers over real cached detections from the Microduck demo.
 
 Replays detections_cache.npz (RF-DETR Nano on the duck's head camera,
-captured with DUMP_DETECTIONS=detections_cache.npz python fetch_demo.py)
-through each tracker and reports per-update latency and process memory.
+captured with DUMP_DETECTIONS=benchmark/detections_cache.npz DETECTOR=rfdetr
+python demos/fetch_demo.py) through each tracker and reports per-update
+latency and process memory.
 """
 
 import os
 import resource
-import sys
 import statistics
+import sys
 import time
 
 import numpy as np
 import supervision as sv
-
 from trackers import ByteTrackTracker, SORTTracker
 from trackers.utils.iou import BIoU
 
@@ -33,7 +33,8 @@ def load_frames():
     if not os.path.exists(CACHE):
         raise FileNotFoundError(
             f"{CACHE} not found. Capture it with "
-            "DUMP_DETECTIONS=benchmark/detections_cache.npz DETECTOR=rfdetr python demos/fetch_demo.py"
+            "DUMP_DETECTIONS=benchmark/detections_cache.npz DETECTOR=rfdetr "
+            "python demos/fetch_demo.py"
         )
     data = np.load(CACHE)
     rows, n_frames = data["rows"], int(data["n_frames"])

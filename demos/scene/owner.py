@@ -81,7 +81,9 @@ class Owner:
 
     def _carry_ball(self, position):
         qadr, vadr = self.duck.balls[PLAY_JOINT]
-        self.duck.data.qpos[qadr : qadr + 3] = position + [0, 0, 0.032]
+        # An offset, not a concatenation: position is a vector, and this
+        # lifts the ball to sit in the hand rather than inside it.
+        self.duck.data.qpos[qadr : qadr + 3] = position + np.array([0, 0, 0.032])
         self.duck.data.qpos[qadr + 3 : qadr + 7] = [1, 0, 0, 0]
         self.duck.data.qvel[vadr : vadr + 6] = 0.0
 

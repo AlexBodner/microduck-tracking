@@ -15,7 +15,6 @@ import imageio.v2 as imageio
 import mujoco
 import numpy as np
 import supervision as sv
-
 from trackers import SORTTracker
 from trackers.utils.iou import BIoU
 
@@ -26,8 +25,9 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(RL, "scripts"))
 os.chdir(RL)
 
-from duck_detector import DuckDetector  # noqa: E402
 from infer_policy import DEFAULT_POSE  # noqa: E402
+
+from duck_detector import DuckDetector  # noqa: E402
 
 ROBOT_DIR = "src/mjlab_microduck/robot/microduck"
 spec = mujoco.MjSpec.from_file(f"{ROBOT_DIR}/scene.xml")
@@ -50,7 +50,12 @@ for i in range(model.nu):
     data.qpos[qi] = data.ctrl[i] = DEFAULT_POSE[i % 14]
 
 BASES = []
-for name in ("trunk_base_freejoint", "d0_trunk_base_freejoint", "d1_trunk_base_freejoint"):
+DUCK_JOINTS = (
+    "trunk_base_freejoint",
+    "d0_trunk_base_freejoint",
+    "d1_trunk_base_freejoint",
+)
+for name in DUCK_JOINTS:
     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
     BASES.append((int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid])))
 
