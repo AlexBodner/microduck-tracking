@@ -52,6 +52,7 @@ from infer_policy import (  # noqa: E402
 SIM_SECONDS = float(os.environ.get("SIM_SECONDS", 28))
 THROW_SEED = int(os.environ.get("THROW_SEED", 0))   # vary where throws land
 HEADLESS = bool(os.environ.get("HEADLESS"))         # skip video for batch runs
+TRIAL = bool(os.environ.get("TRIAL"))               # report each grab
 FIRST_THROW = 2.5                # the owner's first throw
 MAX_THROWS = 2                   # throws in the video
 RETHROW_DELAY = 2.0              # owner waits for the duck to finish its kick
@@ -443,6 +444,16 @@ def measure(box, head_yaw):
     return bearing, FOCAL_PX * BALL_DIAMETER / max(diameter_px, 1.0)
 
 
+def report_grab(t):
+    """Distance from the beak's target to the ball the owner actually threw."""
+    trunk_xy, yaw = trunk_yaw_frame()
+    qadr = BALLS[PLAY_JOINT][0]
+    d = data.qpos[qadr : qadr + 2] - trunk_xy
+    c, sn = math.cos(-yaw), math.sin(-yaw)
+    fwd, left = c * d[0] - sn * d[1], sn * d[0] + c * d[1]
+    print(f"TRIAL_GRAB t={t:5.1f} play_ball_distance={math.hypot(fwd, left):.3f}")
+
+
 control_dt = 4 * model.opt.timestep
 n_steps = int(SIM_SECONDS / control_dt)
 out = os.path.join(ROOT, "fetch_demo.mp4")
@@ -454,8 +465,6 @@ frames_with_tracks = 0
 target_id = None            # locked tracker ID (the thrown ball's track)
 target_fix = None           # (bearing, range) from the last real detection
 target_last_seen = -1.0
-target_bearing = None       # bearing from the track, prediction included
-target_bearing_t = None
 track_speed: dict[int, float] = {}   # tracker_id -> EMA image-space speed
 track_center: dict[int, tuple] = {}  # tracker_id -> last box center
 track_birth: dict[int, float] = {}   # tracker_id -> first time seen
@@ -497,7 +506,6 @@ for step in range(n_steps):
         closing_until = None
         target_id = None    # wait for the new moving track
         target_fix = None
-        target_bearing = None
     if throw_anim is not None and not animate_hand(throw_anim, t):
         throw_anim = None
 
@@ -537,10 +545,8 @@ for step in range(n_steps):
             policy.set_vel_cmd(0.0, 0.0, 0.0)
             policy.head_offset[:] = [0.0, 0.1, 0.0, 0.0]
         else:
-            # Bearing follows the track, so the duck keeps facing the ball
-            # through detection dropouts; range is the last real detection.
-            err = target_bearing if target_bearing is not None else target_fix[0]
-            dist = target_fix[1]
+            # Bearing and range both come from the last real detection.
+            err, dist = target_fix
             # Duck-like gaze toward the LOCKED target only.
             policy.head_offset[:] = [
                 0.0,
@@ -549,7 +555,6 @@ for step in range(n_steps):
                 0.0,
             ]
             fresh = t - target_last_seen < STALE_FIX
-            aimed = target_bearing_t is not None and t - target_bearing_t < 1.0
             centred = abs(err) < 0.35
             if grabbed_this_throw:
                 # Touch done: stand over the ball and wait for the owner.
@@ -562,13 +567,16 @@ for step in range(n_steps):
                     closing_until = None
                     grab_settle_until = t + 0.3
                     grabbed_this_throw = True
+                    if TRIAL:
+                        report_grab(t)
             elif fresh and dist < GRAB_RANGE and centred:
                 # Seen, close and lined up. The ball sits a few centimetres
                 # beyond the beak at the range both detectors still resolve,
                 # so walk one fixed step before ducking rather than stopping.
                 closing_until = t + CLOSING_STEP
-            elif not fresh and not aimed:
-                # Neither a detection nor a live track: stand and look.
+            elif not fresh:
+                # No detection under the target: stand and look rather than
+                # walk on a guess.
                 policy.set_vel_cmd(0.0, 0.0, 0.0)
             else:
                 # The policy only breaks into a gait near its max command, and
@@ -655,12 +663,9 @@ for step in range(n_steps):
         # invented, and measuring range from it sends the duck at nothing. So
         # only a track backed by a detection this frame updates the fix.
         if target_id in live:
-            # The track keeps the duck pointed at the ball: its box is
-            # predicted through detection gaps, and a predicted centre is
-            # still a usable bearing. Its predicted *size* is not, so range
-            # is only taken when a real detection sits under the track.
-            bearing, _ = measure(live[target_id], head_yaw)
-            target_bearing, target_bearing_t = bearing, t
+            # The track says which detection is ours; the detection says
+            # where it is. A coasting track still reports a box, but it is a
+            # Kalman guess, so nothing is measured from it.
             box = detection_for(live[target_id], dets)
             if box is not None:
                 target_fix = measure(box, head_yaw)
