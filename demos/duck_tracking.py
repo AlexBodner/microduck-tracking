@@ -74,8 +74,11 @@ writer = imageio.get_writer(out_path, fps=50, quality=8)
 for step in range(300):
     u = min(step * 0.02 / 5.0, 1.0)
     pin(BASES[0], 0.0, 0.0, 0.0)
-    pin(BASES[1], 1.05, 1.1 - 2.2 * u, math.pi + 0.4)
-    pin(BASES[2], 1.35, -1.2 + 2.4 * u, math.pi - 0.4)
+    # Well separated in depth: crossing at the same distance put one duck
+    # completely behind the other, and the detector lost both for long enough
+    # that motion alone could not carry the ids across the gap.
+    pin(BASES[1], 0.85, 1.1 - 2.2 * u, math.pi + 0.4)
+    pin(BASES[2], 1.75, -1.2 + 2.4 * u, math.pi - 0.4)
     for _ in range(4):
         mujoco.mj_step(model, data)
     renderer.update_scene(data, camera="head_camera")
