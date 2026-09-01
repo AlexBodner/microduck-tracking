@@ -84,7 +84,11 @@ in the body frame. Logged against ground truth through both fetches, range
 holds within a few centimetres and bearing within a few degrees the whole way
 in, down to the grab at 0.13 m.
 
-Two things make that work rather than wander. A track coasting on its Kalman
+The track is also what keeps the duck facing the ball: its box is predicted
+through detection gaps, and a predicted centre is still a usable bearing, so
+a dropout no longer strands the duck mid-approach. Its predicted *size* is
+another matter, which is the first of two things that make this work rather
+than wander. A track coasting on its Kalman
 prediction still reports a box, but that box is invented, and range measured
 from it sends the duck walking at nothing, so a fix is only taken when a
 detection is actually under the track; without one the duck stands and looks.
@@ -95,6 +99,15 @@ fixed 0.3 s step after its last sighting and then ducks, which lands the ball
 at 0.14 m: inside the beak's reach, and far enough out that the duck does not
 walk into the ball and knock it away first. Simulator state reaches the
 owner's hand, never the duck.
+
+Across six randomised throws (`THROW_SEED`), the duck reached and pecked the
+thrown ball in 10 of 11 attempts, every grab landing 0.138 to 0.154 m from it.
+That is with the segmentation stand-in. RF-DETR is noticeably weaker here: on
+these renders it pads boxes, flickers on the distractors, and often misses the
+ball in flight, so the duck sometimes never re-locks after a throw. The lock
+deliberately has no fallback for that case, because every fallback we tried
+locked onto detector flicker, and fetching the wrong ball is a worse failure
+than fetching none.
 
 ## Does it fit the real robot?
 
