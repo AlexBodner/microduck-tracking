@@ -40,8 +40,9 @@ RETHROW_DELAY = 2.0    # the owner waits a beat after the duck's touch
 THROW_TIMEOUT = 18.0   # throw again anyway if a fetch stalls
 # Close enough that the duck is visibly walking past lookalikes, far enough
 # off the throw's line that it never knocks one on the way in: the ball rests
-# within about 0.15 m of the centre line and two balls collide inside 0.07 m.
-DISTRACTORS = [(0.58, -0.45), (0.88, 0.46), (1.28, -0.44), (1.62, 0.50)]
+# within about 0.15 m of the centre line and two balls collide inside 0.07 m,
+# which puts the nearest safe lane at 0.22 m. These sit at 0.30 m for margin.
+DISTRACTORS = [(0.58, -0.30), (0.88, 0.31), (1.28, -0.29), (1.62, 0.32)]
 
 
 def build_tracker():

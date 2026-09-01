@@ -67,7 +67,20 @@ PLAY_WINDOW = 1.9     # the little dance after a touch, while the owner comes in
 
 
 class FetchPolicy:
-    """Chooses the ball and drives the duck toward it."""
+    """Chooses the ball and drives the duck toward it.
+
+    Every frame is one `observe` then one `act`. Observation reduces the
+    tracks to a single measurement, `self.fix`, which is the bearing and range
+    of the ball the duck has locked. Control is a walk down six phases, in
+    priority order, and `act` runs exactly one of them:
+
+        pretrained  a shipped policy owns the body: the peck, or a scripted move
+        settling    standing still so the peck starts from a clean stance
+        playing     the wiggle after a touch, while the owner comes to collect
+        searching   no fix yet: stand and watch for the throw
+        closing     the last step, walked on a timer, ending in a peck
+        chasing     walk at the ball, steering on the bearing of its box
+    """
 
     def __init__(self, duck, width, focal):
         self.duck = duck
@@ -120,7 +133,16 @@ class FetchPolicy:
     # -- perception --------------------------------------------------------
 
     def observe(self, tracked, detections, t):
-        """Update track motion, lock onto the thrown ball, and take a fix."""
+        """Read this frame's tracks, in three steps.
+
+        How is each track moving, which one is our ball, and where is it?
+        """
+        live = self._track_motion(tracked, t)
+        self._lock_thrown_ball(live, t)
+        self._take_fix(live, detections, t)
+
+    def _track_motion(self, tracked, t):
+        """Image-space speed per track id. Returns the ids visible right now."""
         live = {}
         for i, tracker_id in enumerate(tracked.tracker_id):
             tracker_id = int(tracker_id)
@@ -134,91 +156,108 @@ class FetchPolicy:
                     0.5 * self.speeds.get(tracker_id, 0.0) + 0.5 * moved
                 )
             self.centres[tracker_id] = centre
+        return live
 
-        # Motion is the only signal precise enough to trust here. A "newest
-        # track" fallback for throws the detector misses in flight locks onto
-        # detector flicker on the lookalikes instead, and fetching the wrong
-        # ball is a worse failure than fetching none.
-        if self.target_id is None and self.release_time <= t <= self.lock_until:
-            moving = [
-                (speed, tracker_id)
-                for tracker_id, speed in self.speeds.items()
-                if speed >= LOCK_SPEED and tracker_id in live
-            ]
-            if moving:
-                _, self.target_id = max(moving)
+    def _lock_thrown_ball(self, live, t):
+        """Adopt the fastest-moving track in the window after a throw.
 
-        if self.target_id in live:
-            box = detection_for(live[self.target_id], detections)
-            if box is not None:
-                self.fix = measure(box, self.duck.head_yaw, self.width, self.focal)
-                self.fix_time = t
+        Motion is the only signal precise enough to trust here. A "newest
+        track" fallback for throws the detector misses in flight locks onto
+        detector flicker on the lookalikes instead, and fetching the wrong
+        ball is a worse failure than fetching none.
+        """
+        if self.target_id is not None or not self.release_time <= t <= self.lock_until:
+            return
+        moving = [
+            (speed, tracker_id)
+            for tracker_id, speed in self.speeds.items()
+            if speed >= LOCK_SPEED and tracker_id in live
+        ]
+        if moving:
+            _, self.target_id = max(moving)
+
+    def _take_fix(self, live, detections, t):
+        """Measure bearing and range, but only from a real detection.
+
+        A track with no detection under it is coasting on its Kalman
+        prediction. That is fine for keeping the id alive and useless for
+        measuring distance, so the last good fix is left to go stale instead.
+        """
+        if self.target_id not in live:
+            return
+        box = detection_for(live[self.target_id], detections)
+        if box is not None:
+            self.fix = measure(box, self.duck.head_yaw, self.width, self.focal)
+            self.fix_time = t
 
     # -- control -----------------------------------------------------------
 
     def act(self, t):
-        """One control decision. Sets the duck's velocity and gaze commands."""
+        """One control decision: work out which phase the duck is in, run it."""
         policy = self.duck.policy
         if policy.behavior_mode is not None or policy.ground_pick_mode:
-            return
-
+            return  # a pretrained policy owns the body right now
         if self.settle_until is not None:
-            policy.set_vel_cmd(0.0, 0.0, 0.0)
-            policy.head_offset[:] = 0.0
-            if t >= self.settle_until:
-                self.settle_until = None
-                policy.trigger_ground_pick()
-            return
-
-        if t < self.play_until:
+            self._settle(t, policy)
+        elif t < self.play_until:
             self._play(t, policy)
-            return
+        elif self.fix is None:
+            self._search(policy)
+        else:
+            self._chase(t, policy)
 
-        if self.fix is None:
-            # Waiting for the owner: stand, head level, watch the field.
-            policy.set_vel_cmd(0.0, 0.0, 0.0)
-            policy.head_offset[:] = [0.0, 0.1, 0.0, 0.0]
-            return
+    def _settle(self, t, policy):
+        """Stand still for a beat: the pick policy was trained from a stance."""
+        policy.set_vel_cmd(0.0, 0.0, 0.0)
+        policy.head_offset[:] = 0.0
+        if t >= self.settle_until:
+            self.settle_until = None
+            policy.trigger_ground_pick()
 
+    def _search(self, policy):
+        """Nothing measured yet. Stand, head level, watch for the throw."""
+        policy.set_vel_cmd(0.0, 0.0, 0.0)
+        policy.head_offset[:] = [0.0, 0.1, 0.0, 0.0]
+
+    def _chase(self, t, policy):
+        """There is a fix. Look at the ball, then walk, close, or hold."""
         bearing, distance = self.fix
-        # Duck-like gaze, toward the locked target only.
-        policy.head_offset[:] = [
+        policy.head_offset[:] = [  # duck-like gaze, at the locked target only
             0.0,
             float(np.clip(1.2 * (0.55 - distance), 0.0, 0.55)),
             float(np.clip(bearing, -0.5, 0.5)),
             0.0,
         ]
         fresh = t - self.fix_time < STALE_FIX
-        lined_up = abs(bearing) < 0.35
 
         if self.grabbed:
-            # Touch done: stand over the ball and wait for the owner.
-            policy.set_vel_cmd(0.0, 0.0, 0.0)
+            policy.set_vel_cmd(0.0, 0.0, 0.0)  # touched it: wait for the owner
         elif self.closing_until is not None:
-            # The last few centimetres, walked straight. Started from a
-            # detection rather than a guess.
-            policy.set_vel_cmd(lin_vel_x=WALK_SPEED, lin_vel_y=0.0, ang_vel_z=0.0)
-            if t >= self.closing_until:
-                self.closing_until = None
-                self.settle_until = t + SETTLE
-                self.grabbed = True
-                if self.on_grab:
-                    self.on_grab(t)
-        elif fresh and distance < GRAB_RANGE and lined_up:
-            # Seen, close and lined up. The beak reaches about 0.15 m and both
-            # detectors lose the ball around 0.19 m, so close that gap with one
-            # fixed step rather than stopping here and pecking short.
+            self._close(t, policy)
+        elif fresh and distance < GRAB_RANGE and abs(bearing) < 0.35:
+            # Close and lined up, so commit to the peck. The beak reaches about
+            # 0.15 m and both detectors lose the ball around 0.19 m, so that
+            # last gap has to be crossed on a timer rather than on sight. The
+            # gait command from the previous frame carries this one.
             self.closing_until = t + CLOSING_STEP
         elif not fresh:
-            # No detection under the target: stand and look, rather than walk
-            # on a guess.
-            policy.set_vel_cmd(0.0, 0.0, 0.0)
+            policy.set_vel_cmd(0.0, 0.0, 0.0)  # coasting track: don't walk on a guess
         else:
             policy.set_vel_cmd(
                 lin_vel_x=WALK_SPEED,
                 lin_vel_y=0.0,
                 ang_vel_z=float(np.clip(TURN_GAIN * bearing, -1.2, 1.2)),
             )
+
+    def _close(self, t, policy):
+        """The last few centimetres, walked straight, ending in a peck."""
+        policy.set_vel_cmd(lin_vel_x=WALK_SPEED, lin_vel_y=0.0, ang_vel_z=0.0)
+        if t >= self.closing_until:
+            self.closing_until = None
+            self.settle_until = t + SETTLE
+            self.grabbed = True
+            if self.on_grab:
+                self.on_grab(t)
 
     def _play(self, t, policy):
         """After a touch: admire the ball, then an excited wiggle. A dog asking
