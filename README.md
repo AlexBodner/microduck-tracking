@@ -90,8 +90,8 @@ offsets: at 0.14 m the beak only grazes it, at 0.08 to 0.12 m it lands on it
 properly, and at 0.06 m the ankles reach the ball first and kick it away. The
 step aims for the middle of that band.
 
-Across six randomised throws the duck reached and pecked the thrown ball in 11
-of 12 attempts, each grab landing 0.101 to 0.137 m from it, with contact
+Across six randomised throws the duck reached and pecked the thrown ball on
+every attempt, each grab landing 0.112 to 0.137 m from it, with contact
 confirmed from the simulator's own contact list rather than by eye. One thing the POV
 inset does not show is the moment of contact: Pollen mount the lens low and
 behind the beak, so the peck swings the camera through the ball and the view

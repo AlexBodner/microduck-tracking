@@ -50,7 +50,7 @@ from infer_policy import (  # noqa: E402
 )
 
 SIM_SECONDS = float(os.environ.get("SIM_SECONDS", 28))
-THROW_SEED = int(os.environ.get("THROW_SEED", 1))   # vary where throws land
+THROW_SEED = int(os.environ.get("THROW_SEED", 3))   # vary where throws land
 HEADLESS = bool(os.environ.get("HEADLESS"))         # skip video for batch runs
 TRIAL = bool(os.environ.get("TRIAL"))               # report each grab
 FIRST_THROW = 1.2                # the owner's first throw
@@ -122,11 +122,13 @@ for g in spec.worldbody.find_all(mujoco.mjtObj.mjOBJ_GEOM):
         g.friction = [0.5, 0.005, 0.004]
 # Identical DISTRACTOR balls resting in the field. "ball_free" (from the base
 # scene) is the play ball the owner throws.
+# Kept off to the sides: the throw lands somewhere around x 0.6 to 0.9 near
+# the centre line, and a distractor parked there stops the thrown ball dead.
 DISTRACTOR_POS = [
-    (0.55, 0.35),
-    (0.75, -0.30),
-    (1.05, 0.15),
-    (1.20, -0.45),
+    (0.65, 0.58),
+    (0.90, -0.60),
+    (1.20, 0.72),
+    (1.40, -0.78),
 ]
 for k, (bx, by) in enumerate(DISTRACTOR_POS, start=2):
     bb = spec.worldbody.add_body(name=f"ball{k}", pos=[bx, by, 0.035])
@@ -137,7 +139,7 @@ for k, (bx, by) in enumerate(DISTRACTOR_POS, start=2):
         size=[0.035, 0, 0],
         rgba=[1, 0.55, 0, 1],
         condim=6,
-        friction=[0.5, 0.005, 0.001],
+        friction=[0.5, 0.005, 0.004],
         mass=0.015,
     )
 # The owner's hand: a kinematic (mocap) body that sweeps in from behind the
