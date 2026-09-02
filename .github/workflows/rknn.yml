@@ -26,7 +26,9 @@ jobs:
       - name: Export edge_n to raw ONNX
         run: |
           python -m venv .export
-          .export/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          .export/bin/pip install -q torch \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --extra-index-url https://pypi.org/simple
           .export/bin/pip install -q timm onnx onnxscript
           .export/bin/python edge/export_yololite_onnx.py \
             --yololite yololite --variant edge_n --img-size 320 \
