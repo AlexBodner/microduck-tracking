@@ -31,7 +31,8 @@ def write_calibration_set(directory, img_size, count=8):
         path = os.path.join(directory, f"calib_{i}.jpg")
         noise = (np.random.rand(img_size, img_size, 3) * 255).astype(np.uint8)
         Image.fromarray(noise).save(path)
-        paths.append(path)
+        # rknn resolves these relative to the list file, so store bare names.
+        paths.append(os.path.basename(path))
     with open(listing, "w") as handle:
         handle.write("\n".join(paths) + "\n")
     return listing
