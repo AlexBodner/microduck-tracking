@@ -19,7 +19,7 @@ Measured and researched for the "can we use a small RF-DETR?" question:
 
 | Detector | Where it runs | Latency | Verdict |
 |---|---|---|---|
-| YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | ≈60 ms | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ≈1–2 ms more on CPU |
+| YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | ≈60 ms per look, ≈12–20 ms of it inference | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ≈1–2 ms more on CPU |
 | RF-DETR Nano (30.5 M params, 384×384) | Apple M4 MacBook Pro, CPU | 33 ms measured (median 33, p95 35, idle machine) | ≈30 fps off-board; it is what the `DETECTOR=rfdetr` demo mode runs |
 | RF-DETR Nano, split NPU-backbone + CPU-head ([rfdetr-on-rockchip-npu](https://github.com/AlexanderDhoore/rfdetr-on-rockchip-npu)) | **RK3588** (6 TOPS, A76 cores) | **198 ms measured** by that project | ≈5 fps on a chip several times stronger than Microduck's |
 | RF-DETR Nano, same split | RK3566 (0.8 TOPS, A55) | est. 0.6–1 s | **Does not fit for live tracking.** DETR attention ops don't convert to RKNN end-to-end; even the split deployment is CPU-bound on the head, and the A55s are far slower than the RK3588's A76s |
@@ -32,13 +32,44 @@ Adding up the pipeline that actually fits (detector on NPU, tracker on one A55 c
 
 | Stage | Cost | Source |
 |---|---|---|
-| YOLO11n 320×320 INT8 detection | ≈60 ms | Pollen's own on-robot figure (duck-detect) |
+| YOLO11n 320×320 INT8, capture to boxes | ≈60 ms | Pollen's own on-robot figure (duck-detect) |
 | SORT update, real cached detections | 2.0–4.5 ms | our benchmark × conservative 25× A55 scaling |
-| Frame grab + preprocessing glue | ≈5 ms | duck-detect's post-fix pipeline |
-| **Total** | **≈66–70 ms** | **≈ 14 Hz tracked detection** |
+| **Total** | **≈62–65 ms** | **≈ 15 Hz tracked detection** |
 
-The tracker adds ≈5 % to the frame budget the detector already spends: on this
+Pollen's ≈60 ms is a whole look, capture through boxes, so preprocessing is
+already inside it and is not added again here.
+
+The tracker adds ≈4 % to the frame budget the detector already spends: on this
 hardware, tracking is effectively free once you have detection.
+
+### Where that 60 ms goes
+
+Rockchip publish INT8 benchmarks for the RK3566 NPU itself
+([rknn_model_zoo](https://github.com/airockchip/rknn_model_zoo)), taken at
+maximum NPU frequency and excluding pre- and post-processing:
+
+| Model (640×640, INT8) | RK3566/RK3568 | Per frame |
+|---|---|---|
+| MobileNetV2 (224×224) | 180.7 fps | 5.5 ms |
+| YOLOv6n | 48.8 fps | 20.5 ms |
+| YOLOv5n | 39.7 fps | 25.2 ms |
+| YOLOv8n | 34.0 fps | 29.4 ms |
+| YOLO11n | 20.6 fps | 48.5 ms |
+
+YOLO11n costs 48.5 ms at 640×640. Microduck runs it at 320×320, a quarter of
+the pixels, which puts its NPU inference on the order of 12–20 ms once fixed
+per-inference overhead is allowed for. Pollen measure ≈60 ms for the whole
+look. **Most of a Microduck look is camera pipeline, not inference.**
+
+Two consequences. A faster detector buys less than its own benchmark suggests,
+because the model is the smaller half of the budget: the capture path is where
+the frame rate actually lives. And the tracker's 2–4.5 ms is even less
+significant than the total above implies.
+
+This split is derived, not measured. It scales Rockchip's 640×640 figure by
+pixel count, which is roughly how convolutional FLOPs scale but ignores fixed
+overhead, and Pollen's number may include work a leaner pipeline would not.
+Settling it needs an RK3566 board.
 
 **Verified at robot cadence**: the fetch demo run with tracker updates every
 3rd frame (16.7 Hz, `TRACK_EVERY=3`, `minimum_consecutive_frames=1`, buffers
