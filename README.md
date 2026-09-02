@@ -65,6 +65,13 @@ the single-class YOLO the robot ships on its NPU.
 
 ![Duck detector tracking](assets/duck_tracking.gif)
 
+[`demos/counting.py`](demos/counting.py) counts: six balls on an arc wider than
+the lens, never more than four in frame at once, one head sweep, six ids. The
+sweep only goes one way, because SORT associates on motion alone, so a ball
+that leaves the view and comes back returns as a new id.
+
+![Counting demo](assets/counting.gif)
+
 ## How it works
 
 **Policies.** Pollen's own `PolicyInference` runner and pretrained ONNX policies,
