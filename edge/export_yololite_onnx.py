@@ -42,7 +42,8 @@ def main():
         num_anchors_per_level=(1, 1, 1),
         **VARIANTS[args.variant],
     ).eval()
-    print(f"{args.variant}: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M parameters")
+    params = sum(p.numel() for p in model.parameters()) / 1e6
+    print(f"{args.variant}: {params:.2f} M parameters")
 
     dummy = torch.zeros(1, 3, args.img_size, args.img_size)
     with torch.no_grad():

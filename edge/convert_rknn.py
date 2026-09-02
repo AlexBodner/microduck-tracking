@@ -43,7 +43,8 @@ def build(onnx_path, target, quantize, calibration, out_path):
                 target_platform=target)
     if rknn.load_onnx(model=onnx_path) != 0:
         return "load_onnx failed"
-    if rknn.build(do_quantization=quantize, dataset=calibration if quantize else None) != 0:
+    dataset = calibration if quantize else None
+    if rknn.build(do_quantization=quantize, dataset=dataset) != 0:
         return "build failed"
     if rknn.export_rknn(out_path) != 0:
         return "export failed"
@@ -67,8 +68,8 @@ def main():
         tag = "int8" if quantize else "fp16"
         out = os.path.join(args.workdir, f"{stem}_{args.target}_{tag}.rknn")
         print(f"\n===== {args.target} {tag.upper()} =====", flush=True)
-        print(f"RESULT {tag}: {build(args.onnx, args.target, quantize, calibration, out)}",
-              flush=True)
+        result = build(args.onnx, args.target, quantize, calibration, out)
+        print(f"RESULT {tag}: {result}", flush=True)
 
 
 if __name__ == "__main__":
