@@ -32,15 +32,31 @@ RF-DETR does not: its attention does not convert to RKNN, which strands the
 head on the A55s. YOLO-Lite does. Compiling `edge_n` at 320x320 with
 rknn-toolkit2 for `rk3566`, the compiler places every operator it is given:
 
-| Build | Operators on NPU | On CPU | Model size |
-|---|---|---|---|
-| FP16 | 87 | 9 | 1.37 MB |
-| INT8 | 87 | 9 | 0.87 MB |
+| Model | Input | Operators on NPU | On CPU | INT8 size |
+|---|---|---|---|---|
+| Architecture from source, untrained | 320x320 | 87 | 9 | 0.87 MB |
+| `yololite-edge-n` trained on Roboflow | 640x640 | 137 | 19 | 1.38 MB |
 
-The nine CPU operators are the input node, four per-level `Transpose`s and
-four output nodes: the head's output layout, which is CPU work in any
-deployment. No convolution, activation or add falls back. YOLO-Lite uses ReLU
-rather than SiLU, which is part of why it quantizes and maps this cleanly.
+Both compile, in FP16 and INT8. The operators left on the CPU are the input
+node, the output nodes and the `Reshape`/`Transpose` pairs between them: tensor
+plumbing at the graph boundary, which is CPU work in any deployment. No
+convolution, activation or add falls back in either model.
+
+The platform model is the one that matters, since it is what a reader of this
+recipe would actually train. Its package reports
+`post_processing.fused = false`, so NMS stays out of the graph, but the box
+decode is inside it, emitting `boxes_xyxy`, `obj_logits` and `cls_logits`
+directly. Those decode operators (`Softplus`, `Gather`, `Slice`, `Split`,
+`Sigmoid`) are the sort that often strand on the CPU, and here the compiler
+placed them on the NPU.
+
+YOLO-Lite uses ReLU rather than SiLU, which is part of why it quantizes and
+maps this cleanly.
+
+RKNN folds normalization into the graph, so `mean_values` and `std_values` have
+to match training. A Roboflow model package states them in
+`inference_config.json`; `convert_rknn.py` reads them from there rather than
+assuming.
 
 `.github/workflows/rknn.yml` reproduces this on every change to `edge/`, since
 rknn-toolkit2 needs Linux x86_64, `onnx==1.15.0` (it calls `onnx.mapping`,
