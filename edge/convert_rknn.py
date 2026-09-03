@@ -13,6 +13,7 @@ in 1.16) and numpy<2.
 """
 
 import argparse
+import json
 import os
 
 import numpy as np
@@ -38,9 +39,23 @@ def write_calibration_set(directory, img_size, count=8):
     return listing
 
 
-def build(onnx_path, target, quantize, calibration, out_path):
+def normalization_from_config(config_path):
+    """RKNN folds normalization into the graph, so it has to match exactly what
+    the model was trained with. A Roboflow model package states that in
+    inference_config.json: means and stds are fractions of the scaling factor,
+    which RKNN wants in pixel units."""
+    if config_path is None:
+        return [[0, 0, 0]], [[255, 255, 255]]
+    network_input = json.load(open(config_path))["network_input"]
+    scale = network_input.get("scaling_factor", 255)
+    means, stds = network_input["normalization"]
+    return [[m * scale for m in means]], [[s * scale for s in stds]]
+
+
+def build(onnx_path, target, quantize, calibration, out_path, config_path=None):
+    mean_values, std_values = normalization_from_config(config_path)
     rknn = RKNN(verbose=True)
-    rknn.config(mean_values=[[0, 0, 0]], std_values=[[255, 255, 255]],
+    rknn.config(mean_values=mean_values, std_values=std_values,
                 target_platform=target)
     if rknn.load_onnx(model=onnx_path) != 0:
         return "load_onnx failed"
@@ -59,6 +74,8 @@ def main():
     parser.add_argument("--target", default="rk3566")
     parser.add_argument("--img-size", type=int, default=320)
     parser.add_argument("--workdir", default="rknn_build")
+    parser.add_argument("--inference-config", default=None,
+                        help="inference_config.json from a Roboflow model package")
     args = parser.parse_args()
 
     os.makedirs(args.workdir, exist_ok=True)
@@ -69,7 +86,8 @@ def main():
         tag = "int8" if quantize else "fp16"
         out = os.path.join(args.workdir, f"{stem}_{args.target}_{tag}.rknn")
         print(f"\n===== {args.target} {tag.upper()} =====", flush=True)
-        result = build(args.onnx, args.target, quantize, calibration, out)
+        result = build(args.onnx, args.target, quantize, calibration, out,
+                       args.inference_config)
         print(f"RESULT {tag}: {result}", flush=True)
 
 
