@@ -36,6 +36,8 @@ class YOLOLiteDetector:
         size = network_input["training_input_size"]
         self.width, self.height = size["width"], size["height"]
         self.scale = network_input.get("scaling_factor", 255)
+        self.resize_mode = network_input.get("resize_mode", "stretch")
+        self.padding_value = network_input.get("padding_value") or 0
         means, stds = network_input["normalization"]
         self.mean = np.array(means, dtype=np.float32).reshape(3, 1, 1)
         self.std = np.array(stds, dtype=np.float32).reshape(3, 1, 1)
@@ -49,11 +51,25 @@ class YOLOLiteDetector:
         self.confidence = confidence
         self.iou = iou
 
+    def _letterbox(self, frame):
+        """Fit inside the network input, keeping aspect, padding the rest."""
+        height, width = frame.shape[:2]
+        ratio = min(self.width / width, self.height / height)
+        new_width, new_height = round(width * ratio), round(height * ratio)
+        canvas = np.full((self.height, self.width, 3), self.padding_value, np.uint8)
+        left, top = (self.width - new_width) // 2, (self.height - new_height) // 2
+        canvas[top : top + new_height, left : left + new_width] = cv2.resize(
+            frame, (new_width, new_height)
+        )
+        return canvas, ratio, left, top
+
     def __call__(self, frame):
         original_height, original_width = frame.shape[:2]
-        # The package says "stretch", so the aspect ratio is not preserved and
-        # rescaling the boxes back is a straight per-axis factor.
-        resized = cv2.resize(frame, (self.width, self.height))
+        if self.resize_mode == "letterbox":
+            resized, ratio, pad_left, pad_top = self._letterbox(frame)
+        else:
+            resized = cv2.resize(frame, (self.width, self.height))
+            ratio, pad_left, pad_top = None, 0, 0
         blob = resized.astype(np.float32).transpose(2, 0, 1) / self.scale
         blob = ((blob - self.mean) / self.std)[None]
 
@@ -66,10 +82,14 @@ class YOLOLiteDetector:
         if not keep.any():
             return sv.Detections.empty()
 
-        xyxy = boxes[0][keep] * [
-            original_width / self.width, original_height / self.height,
-            original_width / self.width, original_height / self.height,
-        ]
+        xyxy = boxes[0][keep]
+        if ratio is not None:
+            xyxy = (xyxy - [pad_left, pad_top, pad_left, pad_top]) / ratio
+        else:
+            xyxy = xyxy * [
+                original_width / self.width, original_height / self.height,
+                original_width / self.width, original_height / self.height,
+            ]
         detections = sv.Detections(
             xyxy=xyxy.astype(float),
             confidence=confidences[keep].astype(float),
