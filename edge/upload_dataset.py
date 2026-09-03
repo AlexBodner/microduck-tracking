@@ -35,7 +35,7 @@ def voc_annotation(name, width, height, boxes):
         ET.SubElement(obj, "name").text = CLASS_NAME
         box = ET.SubElement(obj, "bndbox")
         for tag, value in (("xmin", x1), ("ymin", y1), ("xmax", x2), ("ymax", y2)):
-            ET.SubElement(box, tag).text = str(int(round(value)))
+            ET.SubElement(box, tag).text = str(round(value))
     return ET.tostring(root, encoding="unicode")
 
 
