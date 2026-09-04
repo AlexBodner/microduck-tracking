@@ -84,8 +84,8 @@ to score the run. In the shipped run it made all three moves it chose on the
 first attempt, standing 7, 8 and 36 mm from the planned spot, and its
 remembered board matched the true one, 15 of 15.
 
-**Seeing.** Twenty-eight marker posts around the board, seven per edge at two
-heights, give the duck its own pose by PnP (1 to 5 mm with the board in view)
+**Seeing.** Twenty-four marker posts around the board, seven per edge at two
+heights with the corners shared, give the duck its own pose by PnP (1 to 5 mm with the board in view)
 and put every piece on a square: the crown of a turned piece sits on its axis
 at a known height, so the ray through it meets that height at the piece's
 centre. Pieces are remembered by identity, on the square most of their recent
