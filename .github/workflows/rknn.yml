@@ -41,11 +41,40 @@ jobs:
             --onnx edge_n_320_raw.onnx --target rk3566 --img-size 320 \
             2>&1 | tee rknn_build.log
 
+      # The architecture above is exported from source with untrained weights.
+      # This is the real thing: a yololite-edge-n trained on the Roboflow
+      # platform, downloaded from its model package.
+      - name: Compile the platform-trained model for rk3566
+        run: |
+          .rknn/bin/python edge/convert_rknn.py \
+            --onnx edge/yololite_edge_n_640_platform.onnx \
+            --inference-config edge/yololite_edge_n_640_platform_config.json \
+            --target rk3566 --img-size 640 --workdir rknn_build_platform \
+            2>&1 | tee rknn_platform.log
+
+      # The model this repo actually deploys: yololite-edge-n trained on frames
+      # rendered from the duck's own camera, at duck-detect's 320x320.
+      - name: Compile the ball detector for rk3566
+        run: |
+          .rknn/bin/python edge/convert_rknn.py \
+            --onnx edge/microduck_balls_320_platform.onnx \
+            --inference-config edge/microduck_balls_320_platform_config.json \
+            --target rk3566 --img-size 320 --workdir rknn_build_balls \
+            2>&1 | tee rknn_balls.log
+
       - name: Report operator placement
         if: always()
         run: |
           echo "## RKNN conversion" >> $GITHUB_STEP_SUMMARY
+          echo "### Architecture from source" >> $GITHUB_STEP_SUMMARY
           grep -E "^RESULT" rknn_build.log >> $GITHUB_STEP_SUMMARY || true
+          echo "### Platform-trained model" >> $GITHUB_STEP_SUMMARY
+          grep -E "^RESULT" rknn_platform.log >> $GITHUB_STEP_SUMMARY || true
+          echo "### Ball detector (the deployed one)" >> $GITHUB_STEP_SUMMARY
+          grep -E "^RESULT" rknn_balls.log >> $GITHUB_STEP_SUMMARY || true
+          for log in rknn_build.log rknn_platform.log rknn_balls.log; do
+            echo "$log: $(grep -cE "NPU +\\\\?\\(?" $log || true) NPU / $(grep -cE "CPU +\\\\?\\(?" $log || true) CPU op placements" >> $GITHUB_STEP_SUMMARY
+          done
           echo '```' >> $GITHUB_STEP_SUMMARY
           grep -iE "not support|unsupported|fallback|cpu|subgraph" rknn_build.log \
             | head -40 >> $GITHUB_STEP_SUMMARY || true
@@ -58,4 +87,8 @@ jobs:
           path: |
             edge_n_320_raw.onnx
             rknn_build/*.rknn
+            rknn_build_platform/*.rknn
+            rknn_build_balls/*.rknn
             rknn_build.log
+            rknn_platform.log
+            rknn_balls.log

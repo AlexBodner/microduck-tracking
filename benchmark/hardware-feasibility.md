@@ -11,7 +11,7 @@
 | RAM | **1 GB** | Shared with robotd, mediad, tofd, the RL policy runtime |
 | Storage | 32 GB eMMC | Not a constraint (≈200 MB for a minimal Python env) |
 | Camera | Front RGB via `mediad` (WebRTC) + 8×8 ToF | Frames accessible on-board and off-board |
-| Existing vision | `duck-detect`: YOLO11n INT8 RKNN, 320×320, single class, ≈60 ms/look after their preprocessing fix | ≈15 Hz detection ceiling; **per-frame only, no tracking anywhere in the stack** |
+| Existing vision | `duck-detect`: YOLO11n INT8 RKNN, 320×320, single class | Their source reports a look taking 407 ms before a preprocessing fix that removed 345 ms of it; no post-fix figure is published. **Per-frame only, no tracking anywhere in the stack** |
 
 ## Which detector feeds the tracker?
 
@@ -19,7 +19,7 @@ Measured and researched for the "can we use a small RF-DETR?" question:
 
 | Detector | Where it runs | Latency | Verdict |
 |---|---|---|---|
-| YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | ≈60 ms per look, ≈12–20 ms of it inference | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ≈1–2 ms more on CPU |
+| YOLO11n 320×320 INT8 (what Microduck ships) | RK3566 NPU | not published post-fix; see the hardware table | **The on-robot path.** Retrain with the classes you need (Roboflow → RKNN export); trackers consumes its boxes for ≈1–2 ms more on CPU |
 | RF-DETR Nano (30.5 M params, 384×384) | Apple M4 MacBook Pro, CPU | 33 ms measured (median 33, p95 35, idle machine) | ≈30 fps off-board; it is what the `DETECTOR=rfdetr` demo mode runs |
 | RF-DETR Nano, split NPU-backbone + CPU-head ([rfdetr-on-rockchip-npu](https://github.com/AlexanderDhoore/rfdetr-on-rockchip-npu)) | **RK3588** (6 TOPS, A76 cores) | **198 ms measured** by that project | ≈5 fps on a chip several times stronger than Microduck's |
 | RF-DETR Nano, same split | RK3566 (0.8 TOPS, A55) | est. 0.6–1 s | **Does not fit for live tracking.** DETR attention ops don't convert to RKNN end-to-end; even the split deployment is CPU-bound on the head, and the A55s are far slower than the RK3588's A76s |
@@ -30,17 +30,37 @@ So: on-device the recipe is *keep the YOLO-class NPU detector, add `trackers` fo
 
 RF-DETR does not: its attention does not convert to RKNN, which strands the
 head on the A55s. YOLO-Lite does. Compiling `edge_n` at 320x320 with
-rknn-toolkit2 for `rk3566`, the compiler places every operator it is given:
+rknn-toolkit2 for `rk3566`, the compiler keeps all the arithmetic on the NPU:
 
-| Build | Operators on NPU | On CPU | Model size |
-|---|---|---|---|
-| FP16 | 87 | 9 | 1.37 MB |
-| INT8 | 87 | 9 | 0.87 MB |
+| Model | Input | Operators on NPU | On CPU | INT8 size |
+|---|---|---|---|---|
+| Architecture from source, untrained | 320x320 | 87 | 9 | 0.87 MB |
+| `yololite-edge-n` trained on Roboflow | 640x640 | 137 | 19 | 1.38 MB |
+| `microduck-balls` ball detector | 320x320 | 137 | 19 | 1.10 MB |
 
-The nine CPU operators are the input node, four per-level `Transpose`s and
-four output nodes: the head's output layout, which is CPU work in any
-deployment. No convolution, activation or add falls back. YOLO-Lite uses ReLU
-rather than SiLU, which is part of why it quantizes and maps this cleanly.
+All three compile, in FP16 and INT8. What stays on the CPU is layout work:
+the input and output nodes plus `Reshape` and `Transpose`. No convolution,
+activation, add or decode arithmetic falls back. Worth knowing that not all of
+it sits at the graph boundary: six of the twelve reshapes in the platform
+models are inside the decode, between NPU operators, so the graph hops
+NPU to CPU and back. Each hop costs synchronisation that only a real board
+will show.
+
+The platform model is the one that matters, since it is what a reader of this
+recipe would actually train. Its package reports
+`post_processing.fused = false`, so NMS stays out of the graph, but the box
+decode is inside it, emitting `boxes_xyxy`, `obj_logits` and `cls_logits`
+directly. Those decode operators (`Softplus`, `Gather`, `Slice`, `Split`,
+`Sigmoid`) are the sort that often strand on the CPU, and here the compiler
+placed them on the NPU.
+
+YOLO-Lite uses ReLU rather than SiLU, which is part of why it quantizes and
+maps this cleanly.
+
+RKNN folds normalization into the graph, so `mean_values` and `std_values` have
+to match training. A Roboflow model package states them in
+`inference_config.json`; `convert_rknn.py` reads them from there rather than
+assuming.
 
 `.github/workflows/rknn.yml` reproduces this on every change to `edge/`, since
 rknn-toolkit2 needs Linux x86_64, `onnx==1.15.0` (it calls `onnx.mapping`,
@@ -56,19 +76,22 @@ RK3566 has run this file.
 
 Adding up the pipeline that actually fits (detector on NPU, tracker on one A55 core):
 
+We are not going to print an end-to-end frame rate, because we do not have
+one. What is documented:
+
 | Stage | Cost | Source |
 |---|---|---|
-| YOLO11n 320×320 INT8, capture to boxes | ≈60 ms | Pollen's own on-robot figure (duck-detect) |
-| SORT update, real cached detections | 2.0–4.5 ms | our benchmark × conservative 25× A55 scaling |
-| **Total** | **≈62–65 ms** | **≈ 15 Hz tracked detection** |
+| A `duck-detect` look, before their preprocessing fix | 407 ms | duck-detect source comment |
+| The frame conversion and resize that fix removed | 345 ms | same comment |
+| SORT update, real cached detections | 2.0 to 4.5 ms | our benchmark, conservative 25x A55 scaling |
 
-Pollen's ≈60 ms is a whole look, capture through boxes, so preprocessing is
-already inside it and is not added again here.
+Pollen do not report what a look costs after the fix, and the sampler that
+replaced the old path is not free, so subtracting one from the other gives a
+number nobody measured. The useful conclusion is narrower and still holds: at
+a few milliseconds against a detector costing tens, tracking is not what limits
+this robot.
 
-The tracker adds ≈4 % to the frame budget the detector already spends: on this
-hardware, tracking is effectively free once you have detection.
-
-### Where that 60 ms goes
+### What the NPU itself costs
 
 Rockchip publish INT8 benchmarks for the RK3566 NPU itself
 ([rknn_model_zoo](https://github.com/airockchip/rknn_model_zoo)), taken at
@@ -82,20 +105,15 @@ maximum NPU frequency and excluding pre- and post-processing:
 | YOLOv8n | 34.0 fps | 29.4 ms |
 | YOLO11n | 20.6 fps | 48.5 ms |
 
-YOLO11n costs 48.5 ms at 640×640. Microduck runs it at 320×320, a quarter of
-the pixels, which puts its NPU inference on the order of 12–20 ms once fixed
-per-inference overhead is allowed for. Pollen measure ≈60 ms for the whole
-look. **Most of a Microduck look is camera pipeline, not inference.**
+These are the NPU alone, so they bound the detector's share of a look rather
+than the look itself. Microduck runs at 320x320, a quarter of the pixels of
+every row above.
 
-Two consequences. A faster detector buys less than its own benchmark suggests,
-because the model is the smaller half of the budget: the capture path is where
-the frame rate actually lives. And the tracker's 2–4.5 ms is even less
-significant than the total above implies.
-
-This split is derived, not measured. It scales Rockchip's 640×640 figure by
-pixel count, which is roughly how convolutional FLOPs scale but ignores fixed
-overhead, and Pollen's number may include work a leaner pipeline would not.
-Settling it needs an RK3566 board.
+Scaling those figures down by pixel count is tempting and we are not going to
+do it: the table itself shows why. YOLOv6n has the most FLOPs of the group and
+the lowest latency, YOLO11n has fewer than YOLOv8n and the highest. On this NPU
+operator support and memory layout matter more than arithmetic, so a number
+derived from pixel ratios would not survive contact with a board.
 
 **Verified at robot cadence**: the fetch demo run with tracker updates every
 3rd frame (16.7 Hz, `TRACK_EVERY=3`, `minimum_consecutive_frames=1`, buffers
@@ -162,7 +180,7 @@ No RK3566 was available to measure on, so the CPU numbers must be scaled. The sc
 - 16 objects, ByteTrack: 291 µs × 25 ≈ **7.3 ms/update**
 - the demo's real detections, SORT: 76 µs mean × 25 ≈ **1.9 ms/update** (p95 175 µs ≈ 4.4 ms)
 
-Against the budget: the detector delivers a frame every ≈60 ms (15 Hz). Even the worst scaled case consumes ≈12 % of one core at that rate, and the robot has four cores, with the control loop needing one. **Compute is not the problem, even before any optimization.** This scaling factor is the one unmeasured link in the chain; a 30-minute benchmark on any RK3566 dev board (≈$40) would close it.
+Against the budget: even the worst scaled case is a few milliseconds per frame against a detector costing tens, on a robot with four cores where the control loop needs one. **Tracking is not what limits this robot.** The scaling factor is the unmeasured link in that chain; a 30-minute benchmark on any RK3566 dev board (≈$40) would close it.
 
 ## What does NOT fit on-board
 
