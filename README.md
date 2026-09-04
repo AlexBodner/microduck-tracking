@@ -72,6 +72,37 @@ that leaves the view and comes back returns as a new id.
 
 ![Counting demo](assets/counting.gif)
 
+## Giant chess
+
+![Giant chess](assets/giant_chess.gif)
+
+[`demos/giant_chess_demo.py`](demos/giant_chess_demo.py): the duck reads a
+duck-scale board through its own camera, keeps a board in memory, has
+python-chess pick a legal one-square move, walks to the piece and kicks it one
+square. Nothing the duck decides on comes from the simulator; it is used only
+to score the run. In the shipped run it made all three moves it chose on the
+first attempt and its remembered board matched the true one, 16 of 16.
+
+**Seeing.** Sixteen marker posts around the board give the duck its own pose by
+PnP (1 to 5 mm on the near half of the board) and put every piece on a square:
+the crown of a turned piece sits on its axis at a known height, so the ray
+through it meets that height at the piece's centre. Pieces are remembered by
+identity, on the square most of their recent sightings agree on, so a piece
+out of view stays where it was last seen and jitter across a boundary does
+not spawn a second one.
+
+**Walking and kicking.** The gait cannot inch: a 0.6 s creep moves 14 mm one
+time and 56 mm the next. So the walk is coarse until the piece is in view, then
+homes in on the piece itself and stops early; the kick policy is run at twice
+its action scale on a wide flat-based piece, which launches it one square and
+leaves it standing, with about 10 mm of forward tolerance at the foot. The
+kick policy observes every joint, so the head must be neutral to kick: with
+the head turned, the foot never swings.
+
+Honest limits: moves are one-square and orthogonal, from stands on rank 1;
+piece type comes from the segmentation buffer in place of a detector; the
+success rate across our runs was two to three moves in three.
+
 ## How it works
 
 **Policies.** Pollen's own `PolicyInference` runner and pretrained ONNX policies,
