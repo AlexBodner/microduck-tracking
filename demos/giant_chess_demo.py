@@ -17,9 +17,9 @@ import numpy as np
 import supervision as sv
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import giant_chess as G  # noqa: E402
-from trackers import SORTTracker  # noqa: E402
-from trackers.utils.iou import BIoU  # noqa: E402
+import giant_chess as G
+from trackers import SORTTracker
+from trackers.utils.iou import BIoU
 
 # A position with room behind the pawns: the duck stands on rank 1 to push a
 # pawn, and its feet need the adjacent squares empty.

@@ -20,16 +20,17 @@ import mujoco
 import numpy as np
 import supervision as sv
 
-from trackers import SORTTracker
-from trackers.utils.iou import BIoU
-
 RL = os.environ["MICRODUCK_RL"]
 POLICIES = os.environ["MICRODUCK_POLICIES"]
 sys.path.insert(0, os.path.join(RL, "scripts"))
 os.chdir(RL)
 
-from infer_policy import (BALL_OFFSET_ABS_Y, BALL_OFFSET_X,  # noqa: E402
-                          MICRODUCK_BALL_XML, PolicyInference)
+from infer_policy import (  # noqa: E402
+    BALL_OFFSET_ABS_Y,
+    BALL_OFFSET_X,
+    MICRODUCK_BALL_XML,
+    PolicyInference,
+)
 
 # ---- The board ---------------------------------------------------------------
 N = 8
@@ -677,7 +678,7 @@ class DeadReckoning:
         if vx < 0.2:
             return 0.0, 0.0, 0.0
         return 0.40 * vx, 0.2 * vy, 0.6 * wz - 0.04
-    
+
     def advance(self, command, dt):
         if self.pose is None:
             return None
