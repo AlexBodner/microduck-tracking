@@ -7,21 +7,24 @@ end it prints how the run scored against the simulator's ground truth.
 
 import math
 import os
+import sys
 
 import chess
 import cv2
-import giant_chess as G
 import imageio.v2 as imageio
 import mujoco
 import numpy as np
 import supervision as sv
-from trackers import SORTTracker
-from trackers.utils.iou import BIoU
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import giant_chess as G  # noqa: E402
+from trackers import SORTTracker  # noqa: E402
+from trackers.utils.iou import BIoU  # noqa: E402
 
 # A position with room behind the pawns: the duck stands on rank 1 to push a
 # pawn, and its feet need the adjacent squares empty.
 POSITION = {
-    "a1": "R", "h1": "K", "d4": "Q", "c4": "B", "f3": "N", "c2": "P", "e2": "P", "g2": "P",
+    "a1": "R", "h1": "K", "a4": "Q", "b5": "B", "g3": "N", "c2": "P", "e2": "P",
     "a8": "r", "d8": "q", "g8": "k", "b7": "p", "e7": "p", "g7": "p", "c6": "n", "f5": "b",
 }
 MOVES = int(os.environ.get("MOVES", 3))
@@ -177,14 +180,15 @@ def main():
             # Stay off the pieces: only stands on rank 1 or outside the board,
             # reached along the outside of the near edge and entered at the file.
             stand_sq = G.square_of_world(pose[0], pose[1])
-            if stand_sq is not None and stand_sq[1] > 0:
+            if stand_sq is not None and stand_sq[1] > 1:
                 continue
             seen = G.markers_in_view(pose, markers, T_t_c_neutral)
             if seen < 6:
                 continue
             is_pawn = board.piece_at(move.from_square).piece_type == chess.PAWN
-            edge = min(src[0], G.N - 1 - src[0]) < 2     # a, b, g, h: corners are cramped
-            ranked.append((0 if is_pawn else 1, int(edge), src[1], -seen, move.uci(), move, src, dst))
+            if min(src[0], G.N - 1 - src[0]) < 2:        # a, b, g, h: corners are cramped
+                continue
+            ranked.append((0 if is_pawn else 1, 0, src[1], -seen, move.uci(), move, src, dst))
         if not ranked:
             print("no playable move from the remembered board")
             break
@@ -239,7 +243,8 @@ def main():
                 director.on_frame(pilot, (0, 0, 0))
             t += 3.6
             rel, t = pilot.measure_piece(name, t)
-            still_there = rel is not None and abs(rel[0] - G.KICK_FOOT[0]) < 0.06 and abs(rel[1] - G.KICK_FOOT[1]) < 0.06
+            # Unseen is not gone: only a piece seen away from the foot counts as moved.
+            still_there = rel is None or (abs(rel[0] - G.KICK_FOOT[0]) < 0.06 and abs(rel[1] - G.KICK_FOOT[1]) < 0.06)
             if not still_there or attempts >= 2:
                 break
             e_x = rel[0] - G.KICK_FOOT[0]
@@ -255,15 +260,16 @@ def main():
         director.caption = f"{uci}: piece on {G.square_name(*landed) if landed else 'the floor'}" + (" - move made" if ok else " - missed")
         director.sub = "measured in sim; relocalizing, then walking back out to read the board"
         t = pilot.relocalize(t)
-        t = pilot.go_via(outside, t, tolerance=0.10)          # out the way it came in
-        t = pilot.go_via((near - 0.40, 0.0), t, tolerance=0.12)
-        for _ in range(int(0.8 / duck.dt)):
-            pilot.tick((0.0, 0.0, 0.0), t)
-            t += duck.dt
         if not still_there:
             memory.apply_move(src, dst, move_index)
         if ok:
             board.push(move)
+        # Straight back to the reading spot on dead reckoning: from a stand on
+        # rank 1 the line home leaves the board at once and crosses nothing.
+        t = pilot.retreat((near - 0.40, 0.0), t)
+        for _ in range(int(0.8 / duck.dt)):
+            pilot.tick((0.0, 0.0, 0.0), t)
+            t += duck.dt
         # The duck plays white: three moves of its own plan, so its walks stay on
         # the half of the board where the posts are densest in its view.
 
