@@ -54,10 +54,27 @@ def read_boxes(label_path, width, height):
     return boxes
 
 
+def split_for(index, scene_length):
+    """Split by scene, never by frame.
+
+    `render_dataset.py` keeps a ball arrangement for `scene_length` consecutive
+    frames and only the head angle changes between them. Splitting on the frame
+    index therefore puts near-identical frames in train and test, and the
+    platform reports something close to 100% because the model has memorised
+    those arrangements. Whole scenes go to one split or another.
+    """
+    scene = index // scene_length
+    if scene % 6 == 5:
+        return "test"
+    if scene % 6 == 4:
+        return "valid"
+    return "train"
+
+
 def upload_one(args, project, api_key, index, stem):
     image_path = os.path.join(args.dataset, "images", f"{stem}.jpg")
     label_path = os.path.join(args.dataset, "labels", f"{stem}.txt")
-    split = "train" if index % 10 < 7 else ("valid" if index % 10 < 9 else "test")
+    split = split_for(index, args.scene_length)
 
     with open(image_path, "rb") as handle:
         response = requests.post(
@@ -91,6 +108,8 @@ def main():
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--project", required=True, help="workspace/project")
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--scene-length", type=int, default=25,
+                        help="frames per ball arrangement in render_dataset.py")
     args = parser.parse_args()
 
     api_key = os.environ["ROBOFLOW_API_KEY"]
