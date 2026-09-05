@@ -162,12 +162,9 @@ def main():
     turn = chess.WHITE
     results = []
 
-    for move_index in range(MOVES):
-        director.caption, director.sub, director.highlight = "Reading the board", "corner posts locate the duck, tracked pieces fill the board", ()
-        t = observe(pilot, memory, tracker, pieces, 2.0, t)
-        if T_t_c_neutral is None:
-            T_t_c_neutral = eyes.trunk_from_camera()
-
+    def playable(turn):
+        """Legal one-square moves on the remembered board that the duck can
+        stand for, best first."""
         options, board = G.choose_move(memory, turn)
         occupied = set(memory.letters())
         ranked = []
@@ -189,20 +186,32 @@ def main():
             if min(src[0], G.N - 1 - src[0]) < 2:        # a, b, g, h: corners are cramped
                 continue
             ranked.append((0 if is_pawn else 1, 0, src[1], -seen, move.uci(), move, src, dst))
-        if not ranked:
-            print("no playable move from the remembered board")
-            break
         ranked.sort()
+        return ranked, board
+
+    chained = None
+    for move_index in range(MOVES):
+        if chained is None:
+            director.caption, director.sub, director.highlight = "Reading the board", "corner posts locate the duck, tracked pieces fill the board", ()
+            t = observe(pilot, memory, tracker, pieces, 2.0, t)
+            if T_t_c_neutral is None:
+                T_t_c_neutral = eyes.trunk_from_camera()
+            ranked, board = playable(turn)
+            if not ranked:
+                print("no playable move from the remembered board")
+                break
+        else:
+            ranked, board = chained
         _, _, _, _, uci, move, src, dst = ranked[0]
         side = "white" if turn == chess.WHITE else "black"
         director.caption = f"Move {move_index + 1}: {uci} ({side})"
-        director.sub = f"legal on the remembered board, {len(ranked)} playable candidates"
+        director.sub = (f"legal on the remembered board, {len(ranked)} playable candidates" if chained is None
+                        else "same piece, one square on: no need to walk back and read")
         director.highlight = (src, dst)
         for _ in range(int(1.2 / duck.dt)):
             pilot.tick((0.0, 0.0, 0.0), t)
             t += duck.dt
 
-        director.caption, director.sub = f"Walking to the kick spot for {uci}", "localizing on the marker posts, dead reckoning between fixes"
         target = G.kick_pose(src, dst)
         # The piece the duck will home in on is whatever stands on the source
         # square; the reading put it there, the segmentation names it.
@@ -220,10 +229,20 @@ def main():
             continue
         near_edge = G.BOARD_X - G.BOARD / 2
         outside = (near_edge - 0.30, target[1] - 0.30 * math.sin(target[2]))
-        t = pilot.go_to(target, t0=t, via=[outside])
+        if chained is None:
+            director.caption, director.sub = f"Walking to the kick spot for {uci}", "localizing on the marker posts, dead reckoning between fixes"
+            t = pilot.go_to(target, t0=t, via=[outside])
+        else:
+            # Same piece, one square on, straight from the old stand: the
+            # first kick left the duck within the kick's sideways tolerance,
+            # and stepping back to re-approach measured worse (the backward
+            # walk veers 7 to 17 cm).
+            director.caption = f"One square on for {uci}"
+            t = pilot.relocalize(t)
         director.sub = "closing in on the piece itself: its crown, through the camera, onto its height"
-        t, _ = pilot.servo_to_piece(name, t)
+        t, _ = pilot.servo_to_piece(name, t, yaw=target[2])
         t, _ = pilot.nudge_to_piece(name, t)
+        t = pilot.square_up(name, target[2], t)
 
         # Kick, then look: if the piece is still at the foot, it was a miss.
         # Correct from what it sees and try again. A real robot would.
@@ -232,6 +251,13 @@ def main():
             attempts += 1
             truth = duck.true_pose()
             stand_err = math.hypot(truth[0] - target[0], truth[1] - target[1])
+            # Diagnostic only: where the piece really is relative to the foot.
+            _px, _py = data.qpos[piece_qpos[name]:piece_qpos[name] + 2]
+            _c, _s = math.cos(truth[2]), math.sin(truth[2])
+            _rel = (_c * (_px - truth[0]) + _s * (_py - truth[1]), -_s * (_px - truth[0]) + _c * (_py - truth[1]))
+            print(f"  kick {uci} attempt {attempts}: fwd {(_rel[0] - G.KICK_FOOT[0]) * 1000:+.0f} mm, "
+                  f"lat {(_rel[1] - G.KICK_FOOT[1]) * 1000:+.0f} mm, yaw {math.degrees(G.Navigator.wrap(truth[2] - target[2])):+.0f} deg, "
+                  f"est yaw {math.degrees(G.Navigator.wrap(pilot.dr.pose[2] - target[2])) if pilot.dr.pose is not None else float('nan'):+.0f} deg")
             director.caption = f"Kick {uci}" + (f" (attempt {attempts})" if attempts > 1 else "")
             director.sub = f"stand within {stand_err * 1000:.0f} mm of the plan (measured in sim)"
             for _ in range(int(0.6 / duck.dt)):
@@ -264,6 +290,19 @@ def main():
             memory.apply_move(src, dst, move_index)
         if ok:
             board.push(move)
+        # If the best next move is the same piece one square on, in the
+        # direction the duck already faces, take it from here.
+        chained = None
+        if not still_there and move_index + 1 < MOVES:
+            nxt, _ = playable(turn)
+            same = [c for c in nxt if c[6] == dst]
+            if same and pilot.dr.pose is not None:
+                pose_next = G.kick_pose(same[0][6], same[0][7])
+                ahead = math.hypot(pose_next[0] - pilot.dr.pose[0], pose_next[1] - pilot.dr.pose[1])
+                if ahead < 0.25 and abs(G.Navigator.wrap(pose_next[2] - pilot.dr.pose[2])) < 0.5:
+                    chained = (same + [c for c in nxt if c[6] != dst], board)
+        if chained is not None:
+            continue
         # Straight back to the reading spot on dead reckoning: from a stand on
         # rank 1 the line home leaves the board at once and crosses nothing.
         t = pilot.retreat((near - 0.40, 0.0), t)

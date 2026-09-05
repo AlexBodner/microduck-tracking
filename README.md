@@ -80,33 +80,42 @@ that leaves the view and comes back returns as a new id.
 duck-scale board through its own camera, keeps a board in memory, has
 python-chess pick a legal one-square move, walks to the piece and kicks it one
 square. Nothing the duck decides on comes from the simulator; it is used only
-to score the run. In the shipped run it made all three moves it chose on the
-first attempt, standing 7, 8 and 36 mm from the planned spot, and its
-remembered board matched the true one, 15 of 15.
+to score the run. In the shipped run it made all three moves it chose,
+standing 10, 17 and 44 mm from the planned spot, and its remembered board
+matched the true one, 15 of 15. When the best next move is the same piece one
+square on, it kicks again from where it stands instead of walking out to read.
 
 **Seeing.** Twenty-four marker posts around the board, seven per edge at two
-heights with the corners shared, give the duck its own pose by PnP (1 to 5 mm with the board in view)
-and put every piece on a square: the crown of a turned piece sits on its axis
-at a known height, so the ray through it meets that height at the piece's
-centre. Pieces are remembered by identity, on the square most of their recent
-sightings agree on, so a piece out of view stays where it was last seen and a
-kick that was not seen to move the piece leaves the memory alone.
+heights with the corners shared, give the duck its own pose by PnP (1 to 5 mm
+with the board in view) and put every piece on a square: the crown of a turned
+piece sits on its axis at a known height, so the ray through it meets that
+height at the piece's centre. Pieces are remembered by identity, on the square
+most of their recent sightings agree on, so a piece out of view stays where it
+was last seen, a sighting that cannot be placed is not evidence it is gone, and
+a kick that was not seen to move the piece leaves the memory alone.
 
 **Walking and kicking.** The gait cannot inch: a 0.6 s creep moves 14 mm one
-time and 56 mm the next. So the walk is coarse until the piece is in view, then
-homes in on the piece itself and stops early; the kick policy is run at twice
-its action scale on a wide flat-based piece, which launches it one square and
-leaves it standing, with about 10 mm of forward tolerance at the foot. Turning
-is done in one-second bursts: a positive yaw command alone turns the duck left
-about 25 degrees, a negative one alone does nothing, and a negative one with a
-small sideways command turns it right. Walking away from the board no post is
-in view, so the duck leaves on dead reckoning and only looks again once it has
-turned back to face the board.
+time and 56 mm the next, and nothing under 0.6 s moves it at all. So the walk
+is coarse until the piece is in view, then homes in on the piece and stops
+early, and closes the rest with calibrated steps (a 1 s creep is 57 to 64 mm,
+a 0.7 s creep with a small turn command 44 mm, three trials each). The kick
+policy is run at twice its action scale on a wide flat-based piece, which
+launches it one square and leaves it standing; measured, it lands the piece
+with the foot spot anywhere from 15 mm past to 8 mm short of it and 30 mm to
+either side. Creeping in turns the duck up to 30 degrees, and a kick 30
+degrees off the file lands the piece on the corner of the square, so before
+kicking the duck squares up on the posts under closed loop: open-loop turns
+are not repeatable (the same 0.8 s command turned 2 to 30 degrees), a
+negative yaw command alone does nothing, and walking away from the board
+there is no post in view, so the duck leaves on dead reckoning.
 
 Honest limits: moves are one-square and orthogonal, from stands on rank 1 or
-2; piece type comes from the segmentation buffer in place of a detector; an
-opening from the starting position needs a piece pulled, not pushed, and waits
-on the beak; across our runs the duck made two to three moves in three.
+2; piece type comes from the segmentation buffer in place of a detector; a
+piece lands within about 40 mm of the square's centre, not on it; across our
+runs the duck made two to three moves in three. An opening from the starting
+position is out of reach with a kick: rank 1 is full, so there is no stand
+behind any pawn, and pushing with the body was measured too (the duck stalls
+against the piece, 1 to 3 mm in 3 s). That waits on the beak.
 
 ## How it works
 

@@ -212,6 +212,16 @@ def marker_layout():
 
 def build(position):
     spec = mujoco.MjSpec.from_file(MICRODUCK_BALL_XML)
+    # The kick policy is ball-blind and the demo kicks pieces: hide the
+    # practice ball and park it off the set so nothing meets it.
+    for body in spec.bodies:
+        if body.name == "ball":
+            body.pos = [-3.0, -3.0, 0.05]
+            for geom in body.geoms:
+                geom.rgba = [0, 0, 0, 0]
+                geom.group = 3
+                geom.contype = 0
+                geom.conaffinity = 0
     spec.visual.global_.offwidth = 1280
     spec.visual.global_.offheight = 720
     add_meshes(spec)
@@ -425,6 +435,8 @@ class BoardMemory:
         self.pieces = {}      # piece id -> dict(letter, history, square, step)
 
     def observe(self, piece_id, letter, square, step):
+        if square is None:
+            return            # seen but not placeable (ranged off the board): not evidence it is gone
         entry = self.pieces.setdefault(piece_id, {"letter": letter, "history": [], "square": None, "step": step})
         entry["history"] = (entry["history"] + [square])[-self.HISTORY:]
         best, count = max(((sq, entry["history"].count(sq)) for sq in set(entry["history"])), key=lambda x: x[1])
@@ -565,6 +577,16 @@ def choose_move(memory, turn):
     return options, board
 
 
+def kick_yaw_from(point, dst):
+    """The heading to kick a piece standing at a world point into a square:
+    aim at the square's centre from where the piece actually is, not from
+    the centre of the square it is on. A piece 25 mm across at 100 mm range
+    is a 14 degree difference, and consecutive kicks would otherwise carry
+    the offset along."""
+    dx, dy = world_of(*board_xy(*dst))
+    return math.atan2(dy - point[1], dx - point[0]) + KICK_YAW_OFFSET
+
+
 def kick_pose(src, dst):
     """Where the duck must stand, and face, to kick a piece from src to dst."""
     sx, sy = world_of(*board_xy(*src))
@@ -673,8 +695,10 @@ class DeadReckoning:
     @staticmethod
     def actual(command):
         vx, vy, wz = command
-        if abs(wz) >= 0.8 and vx < 0.2:
+        if abs(wz) >= 0.8 and vx < 0.1:
             return 0.0, 0.0, 0.47 * wz          # turn bursts: about 27 degrees a second
+        if abs(wz) >= 0.8:
+            return 0.06, 0.0, 0.62 * wz         # forward turn: about 35 degrees and 60 mm a second
         if vx < 0.2:
             return 0.0, 0.0, 0.0
         return 0.40 * vx, 0.2 * vy, 0.6 * wz - 0.04
@@ -770,6 +794,45 @@ class Pilot:
         self.settle_fix(t, looks=4)
         return t
 
+    def turn_to(self, yaw, t, within=math.radians(4.0), limit=3.0):
+        """Closed-loop turn on the spot: the open-loop response is not
+        repeatable (the same 0.8 s command turned 2 to 30 degrees depending
+        on what the gait did just before), but with the board in view the
+        posts give a heading every few ticks, so keep turning until it is
+        right. Head straight, so the posts ahead stay in view."""
+        # Whether a turn command takes depends on what the gait did just
+        # before (the same command turned 52 degrees one time and nothing
+        # the next); stronger variants drift up to 10 cm, so a stalled turn
+        # is left alone: the kick survives 15 degrees, a 10 cm shift not.
+        t0 = t
+        while t - t0 < limit:
+            if self.dr.pose is None:
+                break
+            err = Navigator.wrap(yaw - self.dr.pose[2])
+            if abs(err) < within:
+                break
+            command = (0.0, 0.0, 1.0) if err > 0 else (0.0, -0.1, -1.0)
+            self.tick(command, t, head=(LOOK_PITCH, 0.0), dr_command=(0.0, 0.0, command[2]))
+            t += self.duck.dt
+        for _ in range(int(0.5 / self.duck.dt)):
+            self.tick((0.0, 0.0, 0.0), t, head=(LOOK_PITCH, 0.0))
+            t += self.duck.dt
+        self.settle_fix(t, looks=4)
+        return t
+
+    def back_up(self, t, seconds=2.0):
+        """Walk backward with the head straight: the gait walks backward
+        only with the head neutral (measured: 20 cm in 2 s straight, nothing
+        with the head sweeping), and the piece stays in view ahead."""
+        for _ in range(int(seconds / self.duck.dt)):
+            self.tick((-0.30, 0.0, 0.0), t, head=(LOOK_PITCH, 0.0))
+            t += self.duck.dt
+        for _ in range(int(0.5 / self.duck.dt)):
+            self.tick((0.0, 0.0, 0.0), t)
+            t += self.duck.dt
+        self.settle_fix(t, looks=4)
+        return t
+
     def turn_burst(self, sign, t, seconds=1.0):
         """Turn on the spot. Measured on alpha_walking: a positive yaw command
         alone turns left about 25 degrees a second, a negative one alone does
@@ -784,6 +847,24 @@ class Pilot:
             self.tick((0.0, 0.0, 0.0), t)
             t += self.duck.dt
         self.settle_fix(t, looks=4)
+        return t
+
+    # Measured yaw per burst on alpha_walking (degrees, three trials each):
+    # left  0.6 s -> 8, 0.8 s -> 29; right 0.25 s -> 7, 0.4 s -> 18, 0.8 s -> 26.
+    # The response is a staircase, so a correction picks the nearest step.
+    TURN_TABLE = {+1: ((0.6, 8.0), (0.8, 29.0)), -1: ((0.25, 7.0), (0.4, 18.0), (0.8, 26.0))}
+
+    def align_yaw(self, yaw, t, within=math.radians(6.0), tries=4):
+        """Turn to a heading with calibrated bursts, nearest step first."""
+        for _ in range(tries):
+            if self.dr.pose is None:
+                break
+            err = Navigator.wrap(yaw - self.dr.pose[2])
+            if abs(err) < within:
+                break
+            sign = 1 if err > 0 else -1
+            secs, _ = min(self.TURN_TABLE[sign], key=lambda st: abs(st[1] - abs(math.degrees(err))))
+            t = self.turn_burst(sign, t, secs)
         return t
 
     def errors(self, target):
@@ -852,9 +933,13 @@ class Pilot:
                     readings.append(rel)
         return (np.mean(readings, axis=0) if readings else None), t
 
-    STOP_AHEAD = 0.008                # stop this far before the foot spot; the retry closes the rest
+    # The kick lands the piece with the foot spot anywhere from 15 mm past
+    # to 8 mm short of the piece (measured), so the stop aims 4 mm past the
+    # centre of that window to leave room for the coast.
+    STOP_AHEAD = 0.003
+    KICKSTART = float(os.environ.get("KICKSTART", 0.8))   # walking-speed seconds at the start of a servo
 
-    def servo_to_piece(self, piece_name, t, limit=30.0):
+    def servo_to_piece(self, piece_name, t, limit=30.0, yaw=None):
         """Walk in on the piece continuously, watching it every few steps.
 
         Short open-loop bursts of this gait are dominated by start and stop
@@ -874,7 +959,7 @@ class Pilot:
             rel = self.piece_relative(piece_name)
             if rel is None:
                 missing += 1
-                command = (0.0, 0.0, -1.0) if missing > 15 else (Navigator.CREEP, 0.0, 0.0)
+                command = (0.0, -0.1, -1.0) if missing > 15 else (Navigator.CREEP, 0.0, 0.0)
             else:
                 missing = 0
                 distance = float(rel[0])
@@ -882,10 +967,21 @@ class Pilot:
                 self.last_servo_error = (e_x, e_y)
                 if e_x < self.STOP_AHEAD:
                     break
-                if abs(e_y) > 0.015 and rel[0] > 0.05:
-                    command = (Navigator.TURN_FWD, 0.0, float(np.sign(e_y)))
+                # Steer by a gentle arc on the sideways offset, damped by the
+                # heading error so the duck arrives aimed along the file, not
+                # merely centred on the piece: the kick tolerates 12 degrees.
+                yaw_err = 0.0 if (yaw is None or self.dr.pose is None) else Navigator.wrap(self.dr.pose[2] - yaw)
+                turn = 3.0 * e_y / max(rel[0], 0.10) - 1.5 * yaw_err
+                turn = float(np.clip(turn, -0.5, 0.5))
+                if abs(turn) < 0.3 or rel[0] < 0.06:
+                    turn = 0.0
+                if e_x < 0.12 and t - t0 >= self.KICKSTART:
+                    command = (Navigator.CREEP, 0.0, turn)
                 else:
-                    command = (Navigator.CREEP if e_x < 0.12 else Navigator.WALK, 0.0, 0.0)
+                    # From a standstill the creep command takes many seconds
+                    # to get the gait going (measured: 12 s), so a short gap
+                    # is opened at walking speed before easing off.
+                    command = (Navigator.WALK, 0.0, turn)
             self.tick(command, t, head=head)
             t += self.duck.dt
         for i in range(int(1.0 / self.duck.dt)):
@@ -896,6 +992,39 @@ class Pilot:
             self.last_servo_error = (rel[0] - want[0], rel[1] - want[1])
         ok = rel is not None and abs(rel[0] - want[0]) < 0.03 and abs(rel[1] - want[1]) < 0.03
         return t, ok
+
+    def piece_world_xy(self, piece_name, t):
+        """Where the piece stands, from the foot's view and the duck's own
+        pose. None if the piece is not seen."""
+        rel, t = self.measure_piece(piece_name, t)
+        if rel is None or self.dr.pose is None:
+            return None, t
+        x, y, yaw = self.dr.pose
+        c, s = math.cos(yaw), math.sin(yaw)
+        return (x + c * rel[0] - s * rel[1], y + s * rel[0] + c * rel[1]), t
+
+    def square_up(self, piece_name, yaw, t, accept=math.radians(9.0), rounds=3):
+        """Before the kick: fresh fixes with the head up, and if the heading
+        has wandered (the creep in turns the duck up to 30 degrees, and a
+        kick 30 degrees off the file lands the piece on the corner of the
+        square), turn on the spot under closed loop, settle, and look again.
+        One round overshoots by about 10 degrees; two or three converge.
+        Then close the foot spot again."""
+        turned = False
+        for _ in range(rounds):
+            self.settle_fix(t, looks=5)
+            if self.dr.pose is None:
+                break
+            before = math.degrees(Navigator.wrap(self.dr.pose[2] - yaw))
+            if abs(before) < math.degrees(accept):
+                break
+            t = self.turn_to(yaw, t, within=math.radians(6.0))
+            turned = True
+            after = None if self.dr.pose is None else math.degrees(Navigator.wrap(self.dr.pose[2] - yaw))
+            print(f"  square_up: heading {before:+.0f} -> {after:+.0f} deg")
+        if turned:
+            t, _ = self.nudge_to_piece(piece_name, t)
+        return t
 
     def relocalize(self, t):
         """Lost: stand still and sweep the head, and only if that finds no
@@ -922,9 +1051,24 @@ class Pilot:
             self.last_servo_error = err
             if abs(err[0]) <= 0.006 and abs(err[1]) <= 0.014:
                 break
-            if err[0] < -0.006 or abs(err[1]) > 0.014:
+            if err[0] < -0.015 or abs(err[1]) > 0.03:
                 break            # past it, or off line: a swing here knocks neighbours; kick as is
-            t = self.burst((Navigator.CREEP, 0.0, 0.0), 0.22 if err[0] < 0.02 else 0.35, t)
+            # Calibrated steps from standstill (measured, three trials each):
+            # walk 0.6 s -> 91 to 94 mm, creep 1.0 s -> 57 to 64 mm, creep
+            # 0.7 s with a 0.5 turn command -> 44 mm and 2 degrees (a plain
+            # 0.8 s creep turns the duck 10 degrees), creep 0.6 s -> 11 to
+            # 15 mm with a 17 mm sideways shift. Shorter creeps do not get
+            # the gait going.
+            if err[0] > 0.075:
+                t = self.burst((Navigator.WALK, 0.0, 0.0), 0.6, t)
+            elif err[0] > 0.052:
+                t = self.burst((Navigator.CREEP, 0.0, 0.0), 1.0, t)
+            elif err[0] > 0.030:
+                t = self.burst((Navigator.CREEP, 0.0, 0.5), 0.7, t)
+            elif err[0] > 0.008:
+                t = self.burst((Navigator.CREEP, 0.0, 0.0), 0.6, t)
+            else:
+                break
         return t, err
 
     def go_via(self, point, t, tolerance=0.08, limit=40.0, keep_off=()):
@@ -1023,13 +1167,7 @@ class Pilot:
             self.tick(nav.command(pose), t)
             t += self.duck.dt
         self.settle_fix(t)
-        for _ in range(6):
-            if self.dr.pose is None:
-                break
-            yaw_err = Navigator.wrap(target[2] - self.dr.pose[2])
-            if abs(yaw_err) < 0.08:
-                break
-            t = self.turn_burst(float(np.sign(yaw_err)), t, 1.0 if abs(yaw_err) > 0.4 else 0.4)
+        t = self.align_yaw(target[2], t)
         return t
 
 
