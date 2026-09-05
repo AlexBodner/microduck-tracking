@@ -195,7 +195,9 @@ def main():
         return ranked, board
 
     chained = None
-    for move_index in range(MOVES):
+    for move_index in range(MOVES + 2):
+        if len(results) >= MOVES:
+            break
         if chained is None:
             director.caption, director.sub, director.highlight = "Reading the board", "corner posts locate the duck, tracked pieces fill the board", ()
             t = observe(pilot, memory, tracker, pieces, 2.0, t)
@@ -277,9 +279,19 @@ def main():
             t += 3.6
             rel, t = pilot.measure_piece(name, t, far=True)
             # Unseen is not gone: only a piece seen away from the foot counts as moved.
-            # A kick that worked leaves the piece 50 mm or more beyond the
-            # foot spot as the camera sees it; one that did not, under 20.
-            still_there = rel is None or (abs(rel[0] - G.KICK_FOOT[0]) < 0.03 and abs(rel[1] - G.KICK_FOOT[1]) < 0.06)
+            # The move was made only if the piece is now seen nearer the
+            # destination square's centre than the source's, through the
+            # same ranging the reads use (the exact square misreads at a
+            # boundary: the range reads about 25 mm short at that distance).
+            still_there = True
+            if rel is not None and pilot.dr.pose is not None:
+                _x, _y, _yaw = pilot.dr.pose
+                _c, _s2 = math.cos(_yaw), math.sin(_yaw)
+                seen = (_x + _c * rel[0] - _s2 * rel[1], _y + _s2 * rel[0] + _c * rel[1])
+                d_src = math.dist(seen, G.world_of(*G.board_xy(*src)))
+                d_dst = math.dist(seen, G.world_of(*G.board_xy(*dst)))
+                still_there = d_dst >= d_src
+                print(f"  after kick {uci}: piece seen {d_src * 1000:.0f} mm from {G.square_name(*src)}, {d_dst * 1000:.0f} mm from {G.square_name(*dst)}")
             if not still_there or attempts >= 2 or rel is None:
                 break
             e_x = rel[0] - G.KICK_FOOT[0]
