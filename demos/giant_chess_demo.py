@@ -29,6 +29,7 @@ POSITION = {
 }
 MOVES = int(os.environ.get("MOVES", 3))
 OUT = os.environ.get("OUT", "/tmp/giant_chess.mp4")
+NOVIDEO = bool(os.environ.get("NOVIDEO"))
 MAIN_W, MAIN_H = 1280, 720
 POV_INSET = (400, 200)
 DIAGRAM = 260
@@ -51,6 +52,7 @@ class Director:
         self.caption, self.sub = "", ""
         self.highlight = ()
         self.frame_count = 0
+        self.motion = []
         self.tick = 0
 
     def chase(self):
@@ -91,7 +93,10 @@ class Director:
 
     def on_frame(self, pilot, command):
         self.tick += 1
-        if self.tick % 2:
+        # Motion log: what the duck was told to do, per tick, for the summary.
+        kind = "stand" if abs(command[0]) < 0.05 and abs(command[2]) < 0.05 else ("turn" if abs(command[0]) < 0.05 else "walk")
+        self.motion.append((kind, self.caption.split(":")[0].split(" for ")[0].split(" (")[0]))
+        if NOVIDEO or self.tick % 2:
             return
         frame = self.chase()
         pov = None
@@ -133,11 +138,11 @@ def observe(pilot, memory, tracker, pieces, seconds, t):
             t += pilot.duck.dt
         return t
 
-    t = sweep(t, seconds)
+    t = sweep(t, seconds * 0.7)
     t = pilot.burst((G.Navigator.TURN_FWD, 0.0, 1.0), 0.6, t)
-    t = sweep(t, seconds * 0.6)
+    t = sweep(t, seconds * 0.5)
     t = pilot.burst((G.Navigator.TURN_FWD, 0.0, -1.0), 1.2, t)
-    t = sweep(t, seconds * 0.6)
+    t = sweep(t, seconds * 0.5)
     t = pilot.burst((G.Navigator.TURN_FWD, 0.0, 1.0), 0.6, t)
     return t
 
@@ -208,7 +213,7 @@ def main():
         director.sub = (f"legal on the remembered board, {len(ranked)} playable candidates" if chained is None
                         else "same piece, one square on: no need to walk back and read")
         director.highlight = (src, dst)
-        for _ in range(int(1.2 / duck.dt)):
+        for _ in range(int(0.8 / duck.dt)):
             pilot.tick((0.0, 0.0, 0.0), t)
             t += duck.dt
 
@@ -231,6 +236,8 @@ def main():
         outside = (near_edge - 0.30, target[1] - 0.30 * math.sin(target[2]))
         if chained is None:
             director.caption, director.sub = f"Walking to the kick spot for {uci}", "localizing on the marker posts, dead reckoning between fixes"
+            # The outside waypoint keeps the walk off the pieces; from a spot
+            # already well outside the board it is beside the duck, so skip it.
             t = pilot.go_to(target, t0=t, via=[outside])
         else:
             # Same piece, one square on, straight from the old stand: the
@@ -268,14 +275,17 @@ def main():
                 duck.step()
                 director.on_frame(pilot, (0, 0, 0))
             t += 3.6
-            rel, t = pilot.measure_piece(name, t)
+            rel, t = pilot.measure_piece(name, t, far=True)
             # Unseen is not gone: only a piece seen away from the foot counts as moved.
-            still_there = rel is None or (abs(rel[0] - G.KICK_FOOT[0]) < 0.06 and abs(rel[1] - G.KICK_FOOT[1]) < 0.06)
-            if not still_there or attempts >= 2:
+            # A kick that worked leaves the piece 50 mm or more beyond the
+            # foot spot as the camera sees it; one that did not, under 20.
+            still_there = rel is None or (abs(rel[0] - G.KICK_FOOT[0]) < 0.03 and abs(rel[1] - G.KICK_FOOT[1]) < 0.06)
+            if not still_there or attempts >= 2 or rel is None:
                 break
             e_x = rel[0] - G.KICK_FOOT[0]
             director.caption, director.sub = f"Missed {uci}, adjusting", f"piece is {e_x * 1000:+.0f} mm from where the foot wants it"
             t, _ = pilot.nudge_to_piece(name, t)
+            t = pilot.square_up(name, target[2], t)
 
         pq = piece_qpos[name]
         landed = G.square_of_world(*data.qpos[pq:pq + 2])
@@ -293,7 +303,8 @@ def main():
         # If the best next move is the same piece one square on, in the
         # direction the duck already faces, take it from here.
         chained = None
-        if not still_there and move_index + 1 < MOVES:
+        on_line = rel is not None and abs(rel[1] - G.KICK_FOOT[1]) < 0.015
+        if not still_there and on_line and move_index + 1 < MOVES:
             nxt, _ = playable(turn)
             same = [c for c in nxt if c[6] == dst]
             if same and pilot.dr.pose is not None:
@@ -305,7 +316,7 @@ def main():
             continue
         # Straight back to the reading spot on dead reckoning: from a stand on
         # rank 1 the line home leaves the board at once and crosses nothing.
-        t = pilot.retreat((near - 0.40, 0.0), t)
+        t = pilot.retreat(t)
         for _ in range(int(0.8 / duck.dt)):
             pilot.tick((0.0, 0.0, 0.0), t)
             t += duck.dt
@@ -324,6 +335,19 @@ def main():
     remembered = memory.letters()
     right = sum(1 for sq, l in remembered.items() if truth_now.get(sq) == l)
     print(f"wrote {OUT} ({director.frame_count} frames)")
+    m = director.motion
+    if m:
+        dt = duck.dt
+        kinds = [k for k, _ in m]
+        changes = sum(1 for a, b in zip(kinds, kinds[1:]) if a != b)
+        print(f"motion: {len(m) * dt:.0f} s total, stand {kinds.count('stand') * dt:.0f} s, walk {kinds.count('walk') * dt:.0f} s, "
+              f"turn {kinds.count('turn') * dt:.0f} s, {changes} changes of state")
+        phases = {}
+        for kind, phase in m:
+            d = phases.setdefault(phase, {"stand": 0, "walk": 0, "turn": 0})
+            d[kind] += dt
+        for phase, d in phases.items():
+            print(f"  {phase:36s} stand {d['stand']:5.1f} s  walk {d['walk']:5.1f} s  turn {d['turn']:5.1f} s")
     for uci, e, landed, up, ok, n in results:
         print(f"  {uci}: {n} attempt(s), last stand err {e * 1000:.0f} mm, landed {G.square_name(*landed) if landed else '-'}, "
               f"upright={up} -> {'MADE' if ok else 'MISSED'}")

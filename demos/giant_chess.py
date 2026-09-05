@@ -663,15 +663,17 @@ class Navigator:
                 self.phase = "align"
             else:
                 bearing = self.wrap(math.atan2(gy - y, gx - x) - yaw)
-                if abs(bearing) > 1.0:
-                    return 0.0, 0.0, float(np.sign(bearing)) * 1.0
+                if abs(bearing) > 0.8:
+                    # On the spot: a bare negative yaw command does nothing
+                    # on this gait, a right turn needs 0.1 m/s of sideways.
+                    return (0.0, 0.0, 1.0) if bearing > 0 else (0.0, -0.1, -1.0)
                 return self.WALK, 0.0, float(np.clip(1.2 * bearing, -0.5, 0.5))
         if self.phase == "align":
             err = self.wrap(tyaw - yaw)
             if abs(err) < 0.12:
                 self.phase = "final"
             else:
-                return 0.0, 0.0, float(np.sign(err)) * 1.0
+                return (0.0, 0.0, 1.0) if err > 0 else (0.0, -0.1, -1.0)
         if self.phase == "final":
             along = (tx - x) * math.cos(tyaw) + (ty - y) * math.sin(tyaw)
             if along < 0.012:
@@ -699,6 +701,8 @@ class DeadReckoning:
             return 0.0, 0.0, 0.47 * wz          # turn bursts: about 27 degrees a second
         if abs(wz) >= 0.8:
             return 0.06, 0.0, 0.62 * wz         # forward turn: about 35 degrees and 60 mm a second
+        if vx <= -0.3:
+            return 0.39 * vx, 0.0, 0.0          # backward: 0.117 m/s at -0.30 (measured)
         if vx < 0.2:
             return 0.0, 0.0, 0.0
         return 0.40 * vx, 0.2 * vy, 0.6 * wz - 0.04
@@ -794,7 +798,7 @@ class Pilot:
         self.settle_fix(t, looks=4)
         return t
 
-    def turn_to(self, yaw, t, within=math.radians(4.0), limit=3.0):
+    def turn_to(self, yaw, t, within=math.radians(4.0), limit=3.0, room=False):
         """Closed-loop turn on the spot: the open-loop response is not
         repeatable (the same 0.8 s command turned 2 to 30 degrees depending
         on what the gait did just before), but with the board in view the
@@ -804,14 +808,26 @@ class Pilot:
         # before (the same command turned 52 degrees one time and nothing
         # the next); stronger variants drift up to 10 cm, so a stalled turn
         # is left alone: the kick survives 15 degrees, a 10 cm shift not.
+        # With room to drift, a stalled turn escalates to variants that
+        # always take (a little sideways, then forward, with the yaw).
+        variants = {+1: ((0.0, 0.0, 1.0), (0.0, 0.1, 1.0), (0.1, 0.1, 1.0)),
+                    -1: ((0.0, -0.1, -1.0), (0.0, -0.2, -1.0), (0.1, -0.1, -1.0))}
         t0 = t
+        level, t_level, yaw_level = 0, t, None
         while t - t0 < limit:
             if self.dr.pose is None:
                 break
             err = Navigator.wrap(yaw - self.dr.pose[2])
             if abs(err) < within:
                 break
-            command = (0.0, 0.0, 1.0) if err > 0 else (0.0, -0.1, -1.0)
+            sign = 1 if err > 0 else -1
+            if yaw_level is None:
+                yaw_level = self.dr.pose[2]
+            if room and t - t_level > 0.8:
+                if abs(Navigator.wrap(self.dr.pose[2] - yaw_level)) < math.radians(3.0):
+                    level = min(level + 1, 2)
+                t_level, yaw_level = t, self.dr.pose[2]
+            command = variants[sign][level]
             self.tick(command, t, head=(LOOK_PITCH, 0.0), dr_command=(0.0, 0.0, command[2]))
             t += self.duck.dt
         for _ in range(int(0.5 / self.duck.dt)):
@@ -921,8 +937,10 @@ class Pilot:
     SERVO_HEAD = (0.55, -0.45)      # steep down, yaw right: the base rim stays in frame to 3 cm
     SERVO_HEAD_FAR = (0.30, -0.30)  # shallower while the piece is still more than 0.2 m away
 
-    def measure_piece(self, piece_name, t, looks=4):
-        """Stand, look at the piece, average what it sees."""
+    def measure_piece(self, piece_name, t, looks=4, far=False):
+        """Stand, look at the piece, average what it sees. With `far`, look
+        again with the shallow gaze if the steep one shows nothing: a piece
+        just kicked a square on is out of the steep gaze's narrow field."""
         readings = []
         for i in range(looks * 4):
             self.tick((0.0, 0.0, 0.0), t, head=self.SERVO_HEAD)
@@ -931,12 +949,23 @@ class Pilot:
                 rel = self.piece_relative(piece_name)
                 if rel is not None:
                     readings.append(rel)
+        if not readings and far:
+            for i in range(looks * 4):
+                self.tick((0.0, 0.0, 0.0), t, head=self.SERVO_HEAD_FAR)
+                t += self.duck.dt
+                if i % 4 == 3:
+                    rel = self.piece_relative(piece_name)
+                    if rel is not None:
+                        readings.append(rel)
         return (np.mean(readings, axis=0) if readings else None), t
 
     # The kick lands the piece with the foot spot anywhere from 15 mm past
     # to 8 mm short of the piece (measured), so the stop aims 4 mm past the
     # centre of that window to leave room for the coast.
     STOP_AHEAD = 0.003
+    # The approach leaves the piece a consistent 20 mm to the right of the
+    # foot spot (measured across runs), so the servo aims that much left.
+    AIM_LEFT = float(os.environ.get("AIM_LEFT", 0.025))
     KICKSTART = float(os.environ.get("KICKSTART", 0.8))   # walking-speed seconds at the start of a servo
 
     def servo_to_piece(self, piece_name, t, limit=30.0, yaw=None):
@@ -951,7 +980,7 @@ class Pilot:
         steep once it is close, since the rolled camera's vertical field is
         narrow."""
         t0 = t
-        want = np.array(KICK_FOOT)
+        want = np.array(KICK_FOOT) + np.array([0.0, self.AIM_LEFT])
         missing, backoffs = 0, 0
         distance = 0.35
         while t - t0 < limit:
@@ -1022,6 +1051,8 @@ class Pilot:
             turned = True
             after = None if self.dr.pose is None else math.degrees(Navigator.wrap(self.dr.pose[2] - yaw))
             print(f"  square_up: heading {before:+.0f} -> {after:+.0f} deg")
+            if after is not None and abs(after - before) < 2.0:
+                break                  # the turn did not take in this gait state; kick as is
         if turned:
             t, _ = self.nudge_to_piece(piece_name, t)
         return t
@@ -1083,9 +1114,12 @@ class Pilot:
             keep_off = [p for p in keep_off
                         if math.hypot(p[0] - self.dr.pose[0], p[1] - self.dr.pose[1]) > 0.16]
         t0 = t
+        stats = {"reloc": 0, "guard": 0, "turn": 0, "walk": 0.0, "turn_s": 0.0}
+        start_est = None if self.dr.pose is None else np.round(self.dr.pose, 2)
         while t - t0 < limit:
             pose = self.dr.pose
             if pose is None or self.since_fix > 1.0:
+                stats["reloc"] += 1
                 t = self.relocalize(t)
                 continue
             def ahead(p):
@@ -1093,62 +1127,79 @@ class Pilot:
                 b = Navigator.wrap(math.atan2(p[1] - pose[1], p[0] - pose[0]) - pose[2])
                 return d < 0.13 and abs(b) < 1.0
             if any(ahead(p) for p in keep_off):
+                stats["guard"] += 1
                 t = self.turn_burst(1.0, t)                 # a piece in the way: turn off it
                 continue
             dist = math.hypot(point[0] - pose[0], point[1] - pose[1])
             if dist < tolerance:
                 break
             bearing = Navigator.wrap(math.atan2(point[1] - pose[1], point[0] - pose[0]) - pose[2])
+            # A waypoint routes, it is not a target: once passed close by,
+            # carry on rather than circle it (the arc radius is 0.28 m).
+            if dist < 2.5 * tolerance and abs(bearing) > 1.2:
+                break
             if abs(bearing) > 0.6:
                 # Turn on the spot in bursts (about 35 degrees each, then a
-                # fresh fix) rather than sweep an arc through the pieces.
-                t = self.turn_burst(float(np.sign(bearing)), t)
+                # fresh fix) rather than sweep an arc through the pieces;
+                # bursts that do not take give way to a closed-loop turn
+                # with drift allowed.
+                stats["turn"] += 1
+                t1 = t
+                if stats["turn"] > 3:
+                    t = self.turn_to(pose[2] + bearing, t, within=0.3, limit=5.0, room=True)
+                else:
+                    t = self.turn_burst(float(np.sign(bearing)), t)
+                stats["turn_s"] += t - t1
                 continue
             command = (Navigator.WALK, 0.0, float(np.clip(2.0 * bearing, -0.5, 0.5)))
             self.tick(command, t)
             t += self.duck.dt
+            stats["walk"] += self.duck.dt
         else:
             pose = self.dr.pose
             print(f"go_via: gave up after {limit:.0f} s, "
                   f"{math.hypot(point[0] - pose[0], point[1] - pose[1]) * 1000:.0f} mm short of the waypoint")
+        pose = self.dr.pose
+        print(f"  go_via to {np.round(point, 2)} from {start_est}: {t - t0:.1f} s, walk {stats['walk']:.1f} s, "
+              f"{stats['turn']} turn bursts ({stats['turn_s']:.1f} s), {stats['reloc']} relocalize, {stats['guard']} guard; "
+              f"ends {None if pose is None else np.round(pose, 2)}")
         return t
 
-    def retreat(self, point, t, face=None):
-        """Leave the board on dead reckoning. Walking away from the board
-        there is no post in view, so looking for one only stalls; the fix
-        taken before turning is good to a few millimetres, and the walk is
-        short. At the point, turn to face the board (or `face`) and take
-        fresh fixes."""
+    def retreat(self, t, seconds=3.0):
+        """Leave the board by backing straight away from the piece just
+        kicked, watching it (measured: 3 s at -0.30 is 34 to 36 cm back with
+        6 to 10 cm of veer and 20 to 30 degrees of yaw), then turn to face
+        the board's centre under closed loop and take fresh fixes. Two
+        turns of 180 degrees on the spot took 14 s; this takes about 6."""
         if self.dr.pose is None or self.since_fix > 0.5:
             t = self.relocalize(t)
-        for _ in range(10):
-            pose = self.dr.pose
-            bearing = Navigator.wrap(math.atan2(point[1] - pose[1], point[0] - pose[0]) - pose[2])
-            if abs(bearing) < 0.35:
-                break
-            t = self.turn_burst(float(np.sign(bearing)), t, 1.0 if abs(bearing) > 0.6 else 0.5)
-        t0 = t
-        while t - t0 < 12.0:
-            pose = self.dr.pose
-            dist = math.hypot(point[0] - pose[0], point[1] - pose[1])
-            if dist < 0.06:
-                break
-            bearing = Navigator.wrap(math.atan2(point[1] - pose[1], point[0] - pose[0]) - pose[2])
-            self.tick((Navigator.WALK, 0.0, float(np.clip(2.0 * bearing, -0.5, 0.5))), t)
-            t += self.duck.dt
-        for _ in range(int(0.5 / self.duck.dt)):
-            self.tick((0.0, 0.0, 0.0), t)
-            t += self.duck.dt
-        if face is None:
-            face = (BOARD_X, 0.0)
-        for _ in range(10):
-            pose = self.dr.pose
-            bearing = Navigator.wrap(math.atan2(face[1] - pose[1], face[0] - pose[0]) - pose[2])
-            if abs(bearing) < 0.3:
-                break
-            t = self.turn_burst(float(np.sign(bearing)), t, 1.0 if abs(bearing) > 0.6 else 0.5)
+        # Back up to the home line, however far that is (0.117 m/s measured),
+        # so the next walk in starts from behind its waypoints, not beside them.
+        home_x = BOARD_X - BOARD / 2 - 0.42
+        before = None if self.dr.pose is None else self.dr.pose.copy()
+        if before is not None:
+            seconds = float(np.clip((before[0] - home_x) / 0.117, 1.5, 5.0))
+        t = self.back_up(t, seconds)
+        pose = self.dr.pose
+        if pose is not None:
+            t = self.turn_to(math.atan2(0.0 - pose[1], BOARD_X - pose[0]), t, within=0.2, limit=4.0)
         t = self.relocalize(t)
         self.settle_fix(t)
+        # Whether the backward walk takes depends on the gait's state, so
+        # check with a fresh fix and, if the duck is still on the board, turn
+        # around under closed loop (drift is fine here) and walk out.
+        if before is not None and self.dr.pose is not None and self.dr.pose[0] > home_x + 0.15:
+            print(f"  retreat: back-up moved {(before[0] - self.dr.pose[0]) * 1000:.0f} mm, turning around instead")
+            pose = self.dr.pose
+            t = self.turn_to(math.pi, t, within=0.3, limit=8.0, room=True)
+            t0 = t
+            while t - t0 < 6.0 and self.dr.pose is not None and self.dr.pose[0] > home_x:
+                self.tick((Navigator.WALK, 0.0, 0.0), t, head=(LOOK_PITCH, 0.0))
+                t += self.duck.dt
+            pose = self.dr.pose
+            t = self.turn_to(math.atan2(0.0 - pose[1], BOARD_X - pose[0]), t, within=0.2, limit=8.0, room=True)
+            t = self.relocalize(t)
+            self.settle_fix(t)
         return t
 
     def go_to(self, target, t0=0.0, limit=60.0, via=()):
